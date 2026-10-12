@@ -1,0 +1,19 @@
+# Snapshot of the working Linux/CUDA lisa_pipeline environment (Python 3.12.7).
+# See README.md for the native-LISA API and prebuilt GPU-helper requirements.
+numpy==2.3.5
+scipy==1.18.0
+h5py==3.16.0
+jax[cuda12]==0.6.2
+jaxlib==0.6.2
+cupy-cuda12x==14.2.0
+astropy==6.1.7
+healpy==1.19.0
+tqdm==4.70.0
+threadpoolctl==3.6.0
+psutil==7.2.2
+eryn==1.2.6
+lisaconstants==2.0.2
+lisaorbits==3.0.0
+lisagwresponse==3.0.2
+lisainstrument==2.0.0
+pytdi==2.1.0

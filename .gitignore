@@ -1,0 +1,38 @@
+# External catalogues and generated observations/results
+data/*
+!data/README.md
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.fits
+*.csv
+tmp/
+outputs/
+output/
+.dwd_*/
+
+# Credentials, machine settings, caches, and local environments
+.env
+.env.*
+*.pem
+*.key
+credentials*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+.vscode/
+.DS_Store
+._*
+
+# LaTeX build byproducts; retain the supplied review PDF and TeX source
+*.aux
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
