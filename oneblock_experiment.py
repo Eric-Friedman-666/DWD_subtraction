@@ -150,7 +150,6 @@ def iterative_recovery(output,template_file,duration,rate,center,frequency_range
             covariance = estimate['covariance'][core_indices].copy()
             inverse = np.linalg.inv(covariance)
             digest = hashlib.sha256(covariance.tobytes()).hexdigest()
-            covariance.setflags(write=False)
             eligible = ~np.isin(bank_ids,excluded_bank_ids)
             two_f = np.full(len(bank_ids),np.nan)
             if np.any(eligible):

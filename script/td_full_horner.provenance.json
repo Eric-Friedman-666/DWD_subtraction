@@ -1,0 +1,15 @@
+{
+  "artifact": "td_full_horner.so",
+  "sha256": "bcca137c714ca5dcbce18cd9a73d2302e595748f90ed03dd93cdf7184d3d15ca",
+  "bytes": 1408456,
+  "elf_build_id_sha1": "3b5039a9e6243bf67ecd3ceaef7cae475246313f",
+  "platform": "Linux x86-64 ELF shared object",
+  "embedded_ptx_version": "8.4",
+  "embedded_ptx_target": "sm_80",
+  "exported_entry_required": "EricsFullHornerXYZ",
+  "native_cuda_source_available": false,
+  "recompiled_for_publication": false,
+  "source_rebuild_limitation": "This is the byte-identical pre-existing helper, not a reproducible source build. Its CUDA kernel source is not included.",
+  "validation_scope": "Publication performs no GPU/native accuracy qualification. Preserve the compatible Linux/CUDA/JAX-FFI installation; see docs/validation_scope.md.",
+  "redistribution_notice": "Existing third-party notices are preserved in script/LICENSES/."
+}

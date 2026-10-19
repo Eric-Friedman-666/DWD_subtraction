@@ -1,4 +1,4 @@
-# External catalogues and generated observations/results
+# External catalogues and generated scientific products
 data/*
 !data/README.md
 *.h5
@@ -7,16 +7,33 @@ data/*
 *.npz
 *.fits
 *.csv
+*.pkl
+*.pickle
+*.tar
+*.tar.gz
+*.tgz
+*.zip
 tmp/
 outputs/
 output/
+runs/
+checkpoints/
+*.checkpoints/
 .dwd_*/
+*.status.json
+launch.json
+job.status.json
 
-# Credentials, machine settings, caches, and local environments
+# Credentials, host settings, caches and local environments
 .env
 .env.*
+.netrc
+.ssh/
 *.pem
 *.key
+*.p12
+id_rsa*
+id_ed25519*
 credentials*
 __pycache__/
 *.py[cod]
@@ -28,7 +45,7 @@ venv/
 .DS_Store
 ._*
 
-# LaTeX build byproducts; retain the supplied review PDF and TeX source
+# LaTeX build products; historical supplied PDF/TeX remain tracked
 *.aux
 *.log
 *.out

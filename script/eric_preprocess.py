@@ -51,8 +51,10 @@ def generate_waveform_fd(waveform_td, T_obs, fs):
 
 
 def inner_product(a_fd, b_fd, noise_covariance, T_obs, fs):
-    weighted_b = np.linalg.solve(noise_covariance, b_fd.T[..., None])[..., 0]
-    return 4/(T_obs*fs**2)*np.vdot(a_fd.T, weighted_b).real
+    weighted_b = np.linalg.solve(noise_covariance, np.swapaxes(b_fd, -1, -2)[..., None])[..., 0]
+    return 4/(T_obs*fs**2)*np.einsum(
+        '...fc,...fc->...', np.conjugate(np.swapaxes(a_fd, -1, -2)), weighted_b, optimize=True
+    ).real
 
 
 def calculate_snr(dwd_parameters, noise_covariance, T_obs, fs, orbit_file,

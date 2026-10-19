@@ -35,6 +35,7 @@ from tqdm.auto import tqdm
 
 from script.native_lisa_filter import native_signal_filter
 from script.tool import _bme_to_icrs_rotation
+from script.dwd_frequency_support import response_sample_block
 
 PARAMETER_FIELDS = (
     'Amplitude', 'Frequency', 'FrequencyDerivative', 'InitialPhase',
@@ -1415,7 +1416,7 @@ class GPUResponse:
             transfer, _bme_to_icrs_rotation()))
         self.duration, self.rate = duration, rate
         self.frequency_count = len(physical_frequency)
-        self.sample_block = int(round(3600.*rate))
+        self.sample_block = response_sample_block(response_times, duration, rate)
         self.block_count = len(response_times)
         self.inverse_lower = jax.device_put(
             np.linalg.inv(np.linalg.cholesky(covariance)), self.device)

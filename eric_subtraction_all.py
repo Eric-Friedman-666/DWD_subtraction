@@ -1,365 +1,427 @@
-'''Step 1: import all the necessary packages.'''
+# Step 1. Import packages.
 from pathlib import Path
-from tempfile import mkdtemp
-import hashlib
+from contextlib import ExitStack
+from functools import partial
+from time import perf_counter
+from multiprocessing import current_process
+from multiprocessing.shared_memory import SharedMemory
+from multiprocessing.util import Finalize
 import json
-import shutil
+import os
+import pickle
+os.environ.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')
 import h5py
 import numpy as np
+from tqdm.auto import tqdm
 import lisagwresponse
 import lisainstrument
 import pytdi
 from eric_generate_waveform import DWD_simulation_gpu, tdi_gpu
+from script.eric_generate_waveform import GPUResponse
 from script.eric_Fstats import (
     build_response, physical_amplitude_coordinates,
-    physical_amplitudes, reconstruct_waveform, noise_inner_product,
+    physical_amplitudes, reconstruct_waveform,
 )
-from script.dwd_blind_search import (
-    residual_covariance, template_f_statistic_search, amplitude_f_statistic,
-)
+from script.dwd_blind_search import F_statistic
+from script.eric_preprocess import effective_noise_cov, periodogram, inner_product
 from script.dwd_bank_association import assign_bank_ids
+from script.dwd_amplitude_refit import joint_amplitude_only_refit
+from script.dwd_reference_cache import precompute_reference_waveforms
+from script.dwd_run_status import write_run_status
+from script.dwd_worker_supervisor import run_block_jobs
+from script.dwd_frequency_support import chirp_frequency_padding, RESPONSE_STEP_SECONDS
+from script.dwd_chirp_policy import (
+    frequency_dependent_chirp_bounds, frequency_dependent_padding,
+    chirp_bounds_for_bank, bank_padding_values, bank_configuration_record,
+)
 from eric_rjmcmc import run_eryn_rjmcmc
-from script.oneblock_observation import read_checkpoint, write_checkpoint
-from script.tool import _save_tree, single_cpu
-
-'''Step 2: define the parameters.'''
-orbit_file = Path('./data/dwd_observation_full_catalogue.orbits.h5')
-snr_file = Path('./data/ldc_dwd_data.h5')
-observation_file = Path('./data/dwd_observation_full_catalogue.h5')
-output_file = Path('./data/dwd_subtraction_all.h5')
-frequency_range = (0.0001, 0.05)
-f_derivative_pn = [-25, -10]
-freq_block_width = 1e-05
-subtraction_frequency_range = None
-frequency_derivative_bounds = 10. ** f_derivative_pn[1] * np.array([-1., 1.])
-F_threshold = 16.0
-SNR_r_threshold = 7.0
-sample_number = (500, 1500)
-maximum_sources = 64
-with h5py.File(observation_file, 'r') as saved:
-    T_obs = saved['observation'].attrs['duration']
-    fs = saved['observation'].attrs['rate']
-    total_xyz_td = saved['observation/total_xyz_td'][:]
-    detector_config = json.loads(saved['observation'].attrs['detector_config'])
-detector_config['orbits'] = str(orbit_file)
-N, N_day = int(round(T_obs * fs)), int(round(86400 * fs))
-frequency_blocks = np.arange(
-    frequency_range[0], frequency_range[1] - freq_block_width * 1.e-10, freq_block_width,
-)[:, None] + np.array([0., freq_block_width])
-frequency_blocks[-1, 1] = frequency_range[1]
-block_count = len(frequency_blocks)
-block_indices = np.arange(block_count, dtype=np.int64)
-subtraction_range = np.array([frequency_range[0], frequency_range[1]]) if subtraction_frequency_range is None else np.asarray(subtraction_frequency_range, dtype=float)
-selected_block_indices = block_indices[
-    (frequency_blocks[:, 0] >= subtraction_range[0] - freq_block_width * 1.e-10)
-    & (frequency_blocks[:, 1] <= subtraction_range[1] + freq_block_width * 1.e-10)]
-selected_block_count = len(selected_block_indices)
-fields = dict(A=1, f=2, df=3, phi0=4, iota=5, longitude=6, latitude=7, psi_bme=8)
-# Step 3. read the candidate bank and prepare shared state.
-with h5py.File(snr_file, 'r') as saved:
-    template_dwd = saved['catalogue'][saved['catalogue'][:, 10] > SNR_r_threshold]
-total_xyz_fd, fft_frequency = np.fft.rfft(total_xyz_td, axis=-1), np.fft.rfftfreq(N, d=1 / fs)
-work = Path(mkdtemp(prefix='.dwd_all_', dir=output_file.parent)).resolve()
-configuration = dict(duration=T_obs, rate=fs, frequency_range=np.array([frequency_range[0], frequency_range[1]]),
-    frequency_blocks_hz=frequency_blocks, block_indices=block_indices, frequency_block_width=freq_block_width,
-    subtraction_frequency_range=subtraction_range, selected_block_indices=selected_block_indices,
-    derivative_bounds=frequency_derivative_bounds,
-    chirp_coordinate='linear', f_threshold=F_threshold,
-    relative_snr_threshold=SNR_r_threshold, sample_number=np.asarray(sample_number),
-    minimum_sampler_capacity=maximum_sources)
-with h5py.File(output_file, 'w') as saved:
-    _save_tree(saved.create_group('config'), configuration)
-    saved.create_group('blocks')
-    saved.create_group('rounds')
-# Step 4. start a global round and estimate covariance.
-round_number, last_accepted_round = 0, 0
-print(f'Subtraction range {subtraction_range[0]:.8g}--{subtraction_range[1]:.8g} Hz: '
-      f'selected {selected_block_count} of {block_count} blocks, indices '
-      f'{selected_block_indices[0]}--{selected_block_indices[-1]} (zero-based).', flush=True)
-with single_cpu():
-    while True:
-        round_number += 1
-        label = f'{round_number:02d}'
-        print(f'Global round {round_number}: visit {selected_block_count} selected frequency blocks.', flush=True)
-        # This complete Fourier snapshot is unchanged throughout the block loop.
-        round_residual_fd = total_xyz_fd if round_number == 1 else residual_xyz_fd
-        round_residual_fd.setflags(write=False)
-        round_digest = hashlib.sha256(round_residual_fd.tobytes()).hexdigest()
-        covariance_full = residual_covariance(round_residual_fd, T_obs, fs)
-        block_order = selected_block_indices
-        status = np.full(block_count, 'outside_subtraction_range', dtype='S32')
-        status[selected_block_indices] = 'pending'
-        with h5py.File(output_file, 'a') as saved:
-            group = saved['rounds'].create_group(label)
-            group.create_group('blocks')
-            group.attrs.update(complete=False, committed=False, residual_input_sha256=round_digest)
-        # Step 5. evaluate each selected block against its recorded templates.
-        selected_counts = np.zeros(block_count, dtype=np.int64)
-        accepted_counts = np.zeros(block_count, dtype=np.int64)
-        proposals, proposal_doppler, proposal_coefficients, proposal_ids, proposal_blocks = [], [], [], [], []
-        for block_index in block_order:
-            key = f'{block_index:05d}'
-            block_range = frequency_blocks[block_index]
-            center = float(block_range.mean())
-            block_derivative_bounds = np.asarray(frequency_derivative_bounds, dtype=float)
-            padding = block_range[1] * 1.e-4 + max(abs(block_derivative_bounds)) * T_obs + 8 / T_obs
-            retained_bins = np.flatnonzero((fft_frequency >= block_range[0] - padding)
-                                          & (fft_frequency <= block_range[1] + padding) & (fft_frequency > 0))
-            center_bin = int(round(center * T_obs))
-            wide_bins = np.arange(max(1, min(center_bin - 2048, retained_bins[0] - 256)),
-                min(len(fft_frequency), max(center_bin + 2049, retained_bins[-1] + 257)))
-            core_indices = retained_bins - wide_bins[0]
-            physical_frequency, wide_frequency = fft_frequency[retained_bins], fft_frequency[wide_bins]
-            if round_number == 1 and block_index == block_order[0]:
-                builder, response_times, response_geometry = build_response(work, wide_frequency, T_obs, fs, orbit_file=orbit_file)
-                builder_type = type(builder)
-            else:
-                builder = builder_type(np.broadcast_to(np.eye(3), (len(wide_frequency), 3, 3)),
-                    np.zeros((3, len(wide_frequency)), complex), response_times, response_geometry, wide_frequency, T_obs, fs)
-            template_data = dict(derivative_bounds=block_derivative_bounds,
-                retained_bins=retained_bins, wide_bins=wide_bins, core_indices=core_indices,
-                block_index=block_index, frequency_range=block_range,
-                physical_frequency_hz=physical_frequency)
+from script.tool import _save_tree
+if __name__ == '__main__':
+    # Step 2. Configure the subtraction.
+    orbit_file = Path('./data/dwd_observation_full_catalogue.orbits.h5')
+    snr_file = Path('./data/ldc_dwd_data.h5')
+    observation_file = Path('./data/dwd_observation_full_catalogue.h5')
+    output_file = Path(os.environ.get('DWD_SUBTRACTION_OUTPUT', './data/dwd_subtraction_all.h5'))
+    frequency_range = (1.e-4, .05)
+    freq_block_width = 1.e-5
+    frequency_derivative_bounds = np.array([[-4.e-12, -7.60863249122299e-23],
+                                          [7.60863249122299e-23, 4.e-12]])
+    subtraction_frequency_range = None
+    SNR_r_threshold = 7.
+    F_threshold = 16.
+    maximum_sources = 100
+    amplitude_prior_sigma = .1
+    refit_identified_amplitudes = True
+    sample_number = (500, 1500)
+    block_processes = int(os.environ.get('DWD_BLOCK_WORKERS', '3'))
+    worker_progress_timeout = float(os.environ.get('DWD_WORKER_PROGRESS_TIMEOUT', '600'))
+    worker_max_attempts = int(os.environ.get('DWD_WORKER_MAX_ATTEMPTS', '3'))
+    worker_gpu_memory_fraction = float(os.environ.get('DWD_WORKER_GPU_MEM_FRACTION', '.045'))
+    gpu_devices = tuple(os.environ.get('DWD_GPU_DEVICES', os.environ.get('CUDA_VISIBLE_DEVICES', '0')).split(','))
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    status_file = output_file.with_suffix('.status.json')
+    run_status = dict(phase='loading_observation', current_round=None, last_completed_round=0,
+        complete=False, relative_snr_threshold=SNR_r_threshold,
+        configured_workers=block_processes * len(gpu_devices),
+        worker_progress_timeout_s=worker_progress_timeout, worker_max_attempts=worker_max_attempts,
+        worker_gpu_memory_fraction=worker_gpu_memory_fraction,
+        worker_execution='supervised_single_use_spawn',
+        finalized_identified_dwd_count=0, finalized_round_counts={})
+    write_run_status(status_file, **run_status)
+    with h5py.File(observation_file, 'r') as saved:
+        T_obs = saved['observation'].attrs['duration']
+        fs = saved['observation'].attrs['rate']
+        detector_config = json.loads(saved['observation'].attrs['detector_config'])
+    detector_config['orbits'] = str(orbit_file)
+    # Step 3. Read the observation and prepare shared inputs.
+    N = int(round(T_obs * fs))
+    lisa_data_td = np.empty((4, N))
+    lisa_data_td[0] = np.arange(N) / fs
+    with h5py.File(observation_file, 'r') as saved:
+        saved['observation/total_xyz_td'].read_direct(lisa_data_td[1:])
+    lisa_data_fd = np.vstack((np.fft.rfftfreq(N, d=1 / fs), np.fft.rfft(lisa_data_td[1:], axis=-1)))
+    with h5py.File(snr_file, 'r') as saved:
+        dwd_template_table = saved['catalogue'][saved['catalogue'][:, 10] > SNR_r_threshold]
+    frequency_blocks = np.arange(
+        frequency_range[0], frequency_range[1] - freq_block_width * 1.e-10, freq_block_width,
+    )[:, None] + np.array([0., freq_block_width])
+    frequency_blocks[-1, 1] = frequency_range[1]
+    block_count = len(frequency_blocks)
+    block_indices = np.arange(block_count, dtype=np.int64)
+    subtraction_range = np.array(frequency_range) if subtraction_frequency_range is None else np.asarray(subtraction_frequency_range)
+    selected_block_indices = block_indices[
+        (frequency_blocks[:, 0] >= subtraction_range[0] - freq_block_width * 1.e-10)
+        & (frequency_blocks[:, 1] <= subtraction_range[1] + freq_block_width * 1.e-10)]
+    selected_block_count = len(selected_block_indices)
+    fields = dict(A=1, f=2, df=3, phi0=4, iota=5, longitude=6, latitude=7, psi_bme=8)
+    block_range = frequency_blocks[selected_block_indices[0]]
+    frequency_derivative_bounds_by_block = frequency_dependent_chirp_bounds(
+        frequency_blocks, frequency_derivative_bounds)
+    frequency_padding_hz = frequency_dependent_padding(
+        T_obs, freq_block_width, frequency_blocks, frequency_derivative_bounds_by_block)
+    bank_configuration = bank_configuration_record(T_obs, freq_block_width,
+        frequency_blocks, frequency_derivative_bounds,
+        frequency_derivative_bounds_by_block, frequency_padding_hz)
+    write_run_status(output_file.parent / 'frequency_banks.settings.json',
+        **bank_configuration)
+    run_status.update(chirp_bounds_policy=bank_configuration['policy']['name'],
+        chirp_bounds_policy_sha256=bank_configuration['policy_sha256'])
+    padding = frequency_padding_hz[selected_block_indices[0]]
+    retained_bins = np.flatnonzero((lisa_data_fd[0].real >= block_range[0] - padding)
+        & (lisa_data_fd[0].real <= block_range[1] + padding) & (lisa_data_fd[0].real > 0))
+    _, response_times, response_geometry = build_response(
+        output_file.parent, lisa_data_fd[0, retained_bins].real, T_obs, fs, orbit_file=orbit_file)
+    configuration = dict(duration=T_obs, rate=fs, frequency_range=frequency_range,
+        frequency_blocks_hz=frequency_blocks, block_indices=block_indices, frequency_block_width=freq_block_width,
+        subtraction_frequency_range=subtraction_range, selected_block_indices=selected_block_indices,
+        derivative_bounds=frequency_derivative_bounds,
+        derivative_bounds_by_block=frequency_derivative_bounds_by_block,
+        chirp_bounds_policy=bank_configuration['policy'],
+        chirp_bounds_policy_sha256=bank_configuration['policy_sha256'],
+        chirp_coordinate='linear', f_threshold=F_threshold,
+        chirp_prior='positive_log_uniform' if frequency_derivative_bounds.ndim == 1 else 'signed_log_uniform',
+        likelihood_frequency_padding_hz=frequency_padding_hz,
+        response_step_seconds=RESPONSE_STEP_SECONDS,
+        relative_snr_threshold=SNR_r_threshold, sample_number=sample_number, maximum_sources=maximum_sources,
+        amplitude_prior_sigma=amplitude_prior_sigma, block_processes_per_gpu=block_processes,
+        worker_gpu_memory_fraction=worker_gpu_memory_fraction,
+        amplitude_refit='joint_nonnegative_winner_only_fixed_shape_scale' if refit_identified_amplitudes else 'none',
+        gpu_devices=','.join(gpu_devices), strong_reporting_snr_threshold=7.,
+        relative_snr_source='fixed_saved_catalogue', identification_template_scope='remaining_same_block_input_bank', subtraction_policy='identified_only', exclude_recovered_templates=True)
+    with h5py.File(output_file, 'a') as saved:
+        if saved.attrs.get('complete', False):
+            print(f'Already complete: {output_file}', flush=True)
+            raise SystemExit(0)
+        if 'config' not in saved:
+            _save_tree(saved.create_group('config'), configuration)
+            saved.create_group('rounds')
+def initialize_worker(inputs, shared_arrays, gpu_devices=None):
+    global worker_inputs, lisa_data_fd, effective_noise_covariance
+    if gpu_devices is not None:
+        assigned_gpu = os.environ.get('DWD_ASSIGNED_GPU')
+        if assigned_gpu is not None and assigned_gpu not in gpu_devices:
+            raise ValueError('Supervisor assigned a GPU outside the declared device set')
+        worker_index = int(os.environ.get('DWD_WORKER_SLOT_INDEX',
+            current_process()._identity[-1] - 1))
+        os.environ['CUDA_VISIBLE_DEVICES'] = (assigned_gpu if assigned_gpu is not None
+            else gpu_devices[worker_index % len(gpu_devices)])
+        if hasattr(os, 'sched_getaffinity'):
+            cpus = sorted(os.sched_getaffinity(0))
+            os.sched_setaffinity(0, {cpus[worker_index % len(cpus)]})
+        print(f'Worker {os.getpid()} GPU {os.environ["CUDA_VISIBLE_DEVICES"]}', flush=True)
+    worker_inputs = inputs
+    lisa_data_fd_memory = SharedMemory(name=shared_arrays['lisa_data_fd'][0])
+    Finalize(None, lisa_data_fd_memory.close, exitpriority=10)
+    lisa_data_fd = np.ndarray(shared_arrays['lisa_data_fd'][1], dtype=shared_arrays['lisa_data_fd'][2],
+        buffer=lisa_data_fd_memory.buf)
+    effective_noise_covariance_memory = SharedMemory(name=shared_arrays['effective_noise_covariance'][0])
+    Finalize(None, effective_noise_covariance_memory.close, exitpriority=10)
+    effective_noise_covariance = np.ndarray(shared_arrays['effective_noise_covariance'][1],
+        dtype=shared_arrays['effective_noise_covariance'][2], buffer=effective_noise_covariance_memory.buf)
+def single_block_process(block_index, dwd_template_table, *, work, label):
+    from script.dwd_worker_supervisor import worker_progress
+    worker_progress('preparing_bank', force=True, input_sources=int(len(dwd_template_table)))
+    checkpoints = work / f'round_{label}_block_{block_index:05d}'
+    checkpoints.mkdir(parents=True, exist_ok=True)
+    result_file = checkpoints / 'result.pkl'
+    if result_file.exists():
+        with result_file.open('rb') as saved:
+            return pickle.load(saved)
+    print(f'Round {label} block {block_index:05d} worker {os.getpid()} GPU {os.environ.get("CUDA_VISIBLE_DEVICES", "0")}', flush=True)
+    # Step 4. Select the block and calculate its template waveforms.
+    (frequency_blocks, freq_block_width, fields, T_obs, fs, F_threshold,
+     frequency_derivative_bounds, sample_number, maximum_sources,
+     response_times, response_geometry, amplitude_prior_sigma, frequency_padding_hz) = worker_inputs
+    block_range = frequency_blocks[block_index]
+    frequency_derivative_bounds = chirp_bounds_for_bank(
+        frequency_derivative_bounds, block_index, len(frequency_blocks))
+    padding = bank_padding_values(frequency_padding_hz, freq_block_width,
+        len(frequency_blocks))[block_index]
+    retained_bins = np.flatnonzero((lisa_data_fd[0].real >= block_range[0] - padding)
+        & (lisa_data_fd[0].real <= block_range[1] + padding) & (lisa_data_fd[0].real > 0))
+    physical_frequency = lisa_data_fd[0, retained_bins].real
+    covariance = effective_noise_covariance[retained_bins]
+    data = lisa_data_fd[1:, retained_bins]
+    response = GPUResponse(np.broadcast_to(np.eye(3), (len(physical_frequency), 3, 3)),
+        np.zeros((3, len(physical_frequency)), complex), response_times, response_geometry, physical_frequency, T_obs, fs)
+    waveform_table_fd = np.empty((len(dwd_template_table), 4, 3, len(retained_bins)), dtype=complex)
+    for first in range(0, len(dwd_template_table), 128):
+        worker_progress('waveform_basis', first=int(first), total=int(len(dwd_template_table)))
+        points = dwd_template_table[first:first + 128, [2, 3, 6, 7]]
+        padded = np.vstack((points, np.repeat(points[-1:], 128 - len(points), axis=0)))
+        waveform_table_fd[first:first + len(points)] = response.build(padded)[:len(points)]
+    # Step 5. Filter the calculated templates by F-statistic.
+    worker_progress('f_screening', force=True)
+    F_values = F_statistic(data, waveform_table_fd, covariance=covariance, T_obs=T_obs, fs=fs)
+    retained = F_values >= F_threshold
+    filter_result = dwd_template_table[retained]
+    template_number = len(filter_result)
+    del waveform_table_fd, response, F_values
+    if template_number == 0:
+        with (checkpoints / 'result.partial').open('wb') as saved:
+            pickle.dump((np.empty((0, 8)), filter_result, retained_bins, None), saved, protocol=5)
+        (checkpoints / 'result.partial').replace(result_file)
+        return np.empty((0, 8)), filter_result, retained_bins, None
+    # Step 6. Fit the candidate bank and convert recovered physical parameters.
+    worker_progress('sampler_setup', force=True, candidates=int(template_number))
+    posterior = run_eryn_rjmcmc(data, covariance, filter_result, block_range,
+        frequency_derivative_bounds, T_obs, fs, checkpoints,
+        iterations=sum(sample_number), burn_in=sample_number[0],
+        maximum_sources=maximum_sources, amplitude_prior_sigma=amplitude_prior_sigma,
+        response_times=response_times, response_geometry=response_geometry, physical_frequency=physical_frequency)
+    physical = physical_amplitudes(posterior['fit_result']['coefficients'])
+    dwd_recover_table = np.column_stack((physical['A'], posterior['doppler'][:, 0], posterior['doppler'][:, 1],
+        physical['phi0'], physical['iota'], posterior['doppler'][:, 2], posterior['doppler'][:, 3], physical['psi_bme']))
+    worker_progress('saving_result', force=True)
+    with (checkpoints / 'result.partial').open('wb') as saved:
+        pickle.dump((dwd_recover_table, filter_result, retained_bins, posterior), saved, protocol=5)
+    (checkpoints / 'result.partial').replace(result_file)
+    return dwd_recover_table, filter_result, retained_bins, posterior
+if __name__ == '__main__':
+    # Step 7. Fit all blocks, keep identified DWDs, subtract once, and repeat.
+    work = output_file.with_suffix('.checkpoints').resolve()
+    work.mkdir(parents=True, exist_ok=True)
+    run_status.update(phase='reference_cache', selected_block_count=selected_block_count)
+    write_run_status(status_file, **run_status)
+    reference_template_tables = [dwd_template_table[
+        (dwd_template_table[:, fields['f']] >= frequency_blocks[index, 0]) & (
+        (dwd_template_table[:, fields['f']] < frequency_blocks[index, 1]) |
+        ((index == block_count - 1) & (dwd_template_table[:, fields['f']] == frequency_blocks[index, 1])))]
+        for index in selected_block_indices]
+    reference_waveform_cache = precompute_reference_waveforms(work / 'reference_waveforms.h5',
+        selected_block_indices, reference_template_tables, frequency_blocks, freq_block_width,
+        lisa_data_fd[0].real, T_obs, fs, response_times, response_geometry,
+        GPUResponse, physical_amplitude_coordinates, reconstruct_waveform,
+        frequency_padding_hz=frequency_padding_hz,
+        chirp_bounds_by_block=frequency_derivative_bounds_by_block)
+    del reference_template_tables
+    accepted_parameters, accepted_ids, accepted_blocks = [], [], []
+    with h5py.File(output_file, 'r') as saved:
+        round_number = int(saved.attrs.get('last_completed_round', 0))
+        for number in range(1, round_number + 1):
+            group = saved[f'rounds/{number:02d}']
+            accepted_parameters.append(group['parameters'][:])
+            accepted_ids.append(group['dwd_id'][:])
+            accepted_blocks.append(group['block_index'][:])
+            if len(group['parameters']):
+                lisa_data_td[1:] -= group['signal_xyz_td'][:]
+    lisa_data_fd[1:] = np.fft.rfft(lisa_data_td[1:], axis=-1)
+    recovered_ids = np.concatenate(accepted_ids) if accepted_ids else np.empty(0, dtype=np.int64)
+    run_status.update(last_completed_round=round_number,
+        finalized_identified_dwd_count=int(len(np.unique(recovered_ids))))
+    dwd_template_table = dwd_template_table[~np.isin(dwd_template_table[:, 0], recovered_ids)]
+    neighboring_bins, chunk_size = 256, 16384
+    with ExitStack() as shared_memory:
+        lisa_data_fd_memory = SharedMemory(create=True, size=lisa_data_fd.nbytes)
+        shared_memory.callback(lisa_data_fd_memory.unlink)
+        shared_memory.callback(lisa_data_fd_memory.close)
+        shared_memory.callback(globals().pop, 'lisa_data_fd', None)
+        lisa_data_fd_memory.buf[:lisa_data_fd.nbytes] = memoryview(lisa_data_fd).cast('B')
+        lisa_data_fd = np.ndarray(lisa_data_fd.shape, dtype=lisa_data_fd.dtype, buffer=lisa_data_fd_memory.buf)
+        effective_noise_covariance_memory = SharedMemory(create=True, size=lisa_data_fd.shape[1] * 9 * np.dtype(complex).itemsize)
+        shared_memory.callback(effective_noise_covariance_memory.unlink)
+        shared_memory.callback(effective_noise_covariance_memory.close)
+        shared_memory.callback(globals().pop, 'effective_noise_covariance', None)
+        effective_noise_covariance = np.ndarray((lisa_data_fd.shape[1], 3, 3), dtype=complex,
+            buffer=effective_noise_covariance_memory.buf)
+        worker_inputs = (frequency_blocks, freq_block_width, fields, T_obs, fs, F_threshold,
+            frequency_derivative_bounds_by_block, sample_number, maximum_sources,
+            response_times, response_geometry, amplitude_prior_sigma, frequency_padding_hz)
+        shared_arrays = dict(lisa_data_fd=(lisa_data_fd_memory.name, lisa_data_fd.shape, lisa_data_fd.dtype),
+            effective_noise_covariance=(effective_noise_covariance_memory.name,
+                effective_noise_covariance.shape, effective_noise_covariance.dtype))
+        worker_count = block_processes * len(gpu_devices)
+        while True:
+            round_start = perf_counter()
+            round_number += 1
+            label = f'{round_number:02d}'
+            print(f'Round {label}', flush=True)
+            run_status.update(phase='covariance', current_round=round_number,
+                nonempty_input_block_indices=None, empty_input_block_count=None)
+            write_run_status(status_file, **run_status)
+            for first in tqdm(range(1, lisa_data_fd.shape[1], chunk_size), desc='Covariance', unit='chunk'):
+                last = min(first + chunk_size, lisa_data_fd.shape[1])
+                lower, upper = max(1, first - neighboring_bins), min(lisa_data_fd.shape[1], last + neighboring_bins)
+                psd = periodogram(lisa_data_fd[1:, lower:upper], T_obs, fs)
+                local = effective_noise_cov(psd, neighboring_bins=neighboring_bins, downweight_peaks=True)
+                scale = np.trace(local, axis1=-2, axis2=-1).real / 3
+                floor = max(float(np.median(scale)) * 1.e-10, 1.e-100)
+                local += floor * np.eye(3)
+                effective_noise_covariance[first:last] = local[first - lower:last - lower]
+            effective_noise_covariance[0] = effective_noise_covariance[1]
+            block_template_tables = [dwd_template_table[
+                (dwd_template_table[:, fields['f']] >= frequency_blocks[index, 0]) & (
+                (dwd_template_table[:, fields['f']] < frequency_blocks[index, 1]) |
+                ((index == block_count - 1) & (dwd_template_table[:, fields['f']] == frequency_blocks[index, 1])))]
+                for index in selected_block_indices]
+            nonempty_indices = [int(index) for index, table in zip(selected_block_indices, block_template_tables) if len(table)]
+            run_status.update(phase='fitting_blocks', nonempty_input_block_indices=nonempty_indices,
+                empty_input_block_count=selected_block_count - len(nonempty_indices))
+            write_run_status(status_file, **run_status)
+            block_jobs = ((index, table) for index, table in zip(selected_block_indices, block_template_tables)
+                if len(table))
+            function = partial(single_block_process, work=work, label=label)
+            run_block_jobs(function, block_jobs, max_workers=worker_count,
+                initializer=initialize_worker, initargs=(worker_inputs, shared_arrays, gpu_devices),
+                work=work, label=label, progress_timeout=worker_progress_timeout,
+                max_attempts=worker_max_attempts, startup_ready_phase='f_screening',
+                status_file=status_file, run_status=run_status,
+                gpu_devices=gpu_devices, workers_per_gpu=block_processes,
+                worker_gpu_memory_fraction=worker_gpu_memory_fraction)
+            run_status.update(phase='matching')
+            write_run_status(status_file, **run_status)
+            template_number, recovered_number, identified_number, ghost_number = np.zeros((4, block_count), dtype=np.int64)
+            proposals, proposal_ids, proposal_blocks = [], [], []
+            amplitude_refits = {}
+            for block_index, table in zip(selected_block_indices, block_template_tables):
+                if not len(table):
+                    continue
+                with (work / f'round_{label}_block_{block_index:05d}' / 'result.pkl').open('rb') as saved:
+                    dwd_recover_table, filter_result, retained_bins, posterior = pickle.load(saved)
+                template_number[block_index] = len(filter_result)
+                recovered_number[block_index] = len(dwd_recover_table)
+                if not len(dwd_recover_table):
+                    continue
+                covariance = effective_noise_covariance[retained_bins]
+                new_sources = reconstruct_waveform(posterior['fit_result']['coefficients'], posterior['bases'])
+                truth_rows = table
+                truth_ids = truth_rows[:, 0].astype(np.int64)
+                reference_bank = reference_waveform_cache[block_index]
+                remaining = np.isin(reference_bank['dwd_id'], truth_ids)
+                if (not np.array_equal(reference_bank['retained_bins'], retained_bins)
+                        or not np.array_equal(reference_bank['dwd_id'][remaining], truth_ids)):
+                    raise ValueError(f'Reference/checkpoint mismatch: block {block_index}')
+                truth_waveforms = reference_bank['waveforms'][remaining]
+                truth_association = assign_bank_ids(new_sources, truth_waveforms, truth_ids,
+                    np.linalg.inv(covariance), T_obs, fs, minimum_overlap=.9)
+                identified = truth_association['matched_dwd_id'] >= 0
+                identified_number[block_index] = identified.sum()
+                ghost_number[block_index] = len(dwd_recover_table) - identified.sum()
+                if refit_identified_amplitudes and identified.any():
+                    scales, refit_audit = joint_amplitude_only_refit(
+                        lisa_data_fd[1:, retained_bins], new_sources,
+                        truth_association, covariance, T_obs, fs, inner_product=inner_product)
+                    # Fit winners jointly; unmatched/duplicate components never
+                    # enter the minimization. Only winners' overall amplitudes
+                    # change, never their shapes or the saved worker checkpoint.
+                    dwd_recover_table = dwd_recover_table.copy()
+                    dwd_recover_table[identified, 0] *= scales[identified]
+                    amplitude_refits[f'block_{block_index:05d}'] = refit_audit
+                proposals.append(dwd_recover_table[identified])
+                proposal_ids.append(truth_association['matched_dwd_id'][identified])
+                proposal_blocks.append(np.full(identified.sum(), block_index, dtype=np.int64))
+                del new_sources, truth_waveforms, truth_rows
+            dwd_recover_table = np.concatenate(proposals) if proposals else np.empty((0, 8))
+            round_ids = np.concatenate(proposal_ids) if proposal_ids else np.empty(0, dtype=np.int64)
+            round_blocks = np.concatenate(proposal_blocks) if proposal_blocks else np.empty(0, dtype=np.int64)
+            round_summary = dict(parameters=dwd_recover_table, dwd_id=round_ids, block_index=round_blocks,
+                selected_count=template_number, recovered_count=recovered_number,
+                identified_count=identified_number, ghost_count=ghost_number, accepted_count=identified_number,
+                identified_dwd_count=len(np.unique(round_ids)), amplitude_refits=amplitude_refits)
+            run_status.update(phase='subtracting' if len(dwd_recover_table) else 'finalizing_round')
+            write_run_status(status_file, **run_status)
+            if len(dwd_recover_table):
+                N_day = int(round(86400 * fs))
+                links = DWD_simulation_gpu(dwd_recover_table, detector_config)
+                response_model = lisagwresponse.GalacticBinary(A=1., f=.003, ra=0., dec=0.,
+                    orbits=str(orbit_file), orbit_interp_order=5, shift_sun='never')
+                links_file = work / 'recovered_links.h5'
+                with h5py.File(links_file, 'w') as saved:
+                    response_model.init_response_file(saved, detector_config['dt'], len(links), -2 * N_day / fs, 'tcb')
+                    saved['tcb/y'][:] = links
+                del links
+                instrument = lisainstrument.Instrument(
+                    **{name: value for name, value in detector_config.items()
+                       if name not in ('T_obs', 'gpu_batch_size', 'minimum_envelope_samples', 'include_padding')},
+                    gws=str(links_file), size=N + 2 * N_day, t0=-N_day / fs)
+                instrument.disable_all_noises()
+                instrument.disable_dopplers()
+                data = pytdi.Data.from_instrument(instrument.export_numpy_full())
+                new_xyz_td = tdi_gpu(data.measurements, data.args, keep=slice(N_day, N_day + N)) / instrument.central_freq
+                lisa_data_td[1:] -= new_xyz_td
+                lisa_data_fd[1:] = np.fft.rfft(lisa_data_td[1:], axis=-1)
+                round_summary['signal_xyz_td'] = new_xyz_td
+                del data, instrument, response_model
+                accepted_parameters.append(dwd_recover_table)
+                accepted_ids.append(round_ids)
+                accepted_blocks.append(round_blocks)
+                recovered_ids = np.concatenate(accepted_ids)
+                dwd_template_table = dwd_template_table[~np.isin(dwd_template_table[:, 0], round_ids)]
             with h5py.File(output_file, 'a') as saved:
-                if key not in saved['blocks']:
-                    _save_tree(saved['blocks'].create_group(key), template_data)
-            covariance = covariance_full[retained_bins].copy()
-            inverse = np.linalg.inv(covariance)
-            covariance.setflags(write=False)
-            data = round_residual_fd[:, retained_bins]
-            target = (template_dwd[:, fields['f']] >= block_range[0]) & (
-                (template_dwd[:, fields['f']] < block_range[1]) |
-                ((block_index == block_count - 1) & (template_dwd[:, fields['f']] == block_range[1])))
-            search = template_f_statistic_search(data, covariance, builder, core_indices, T_obs, fs,
-                template_dwd[target], f_threshold=F_threshold)
-            search['template_dwd_id'] = template_dwd[target, 0].astype(np.int64)
-            selected = search['template_dwd']
-            selected_counts[block_index] = len(selected)
-            block_data = dict(fixed_covariance=covariance,
-                screening=dict(search=search, residual_input_xyz_fd=data))
-            block_attributes = dict(residual_input_sha256=round_digest,
-                block_index=block_index,
-                fixed_covariance_sha256=hashlib.sha256(covariance.tobytes()).hexdigest(),
-                proposed_for_subtraction=False, accepted_for_subtraction=False)
-            status[block_index] = 'no_new_candidates'
-            # Step 6. run RJMCMC and assess fitted sources.
-            if len(selected):
-                print(f'  Block {key}, {block_range[0]:.8f}--{block_range[1]:.8f} Hz: fit {len(selected)} candidates.', flush=True)
-                checkpoints = work / f'round_{label}_block_{key}'
-                posterior = run_eryn_rjmcmc(data, covariance, selected, block_range,
-                    block_derivative_bounds, center, T_obs, fs, checkpoints,
-                    chain_count=1, inverse_temperatures=(1., .8, .6, .4),
-                    iterations=sum(sample_number), burn_in=sample_number[0],
-                    maximum_sources=max(maximum_sources, len(selected)), chirp_coordinate='linear',
-                    response_times=response_times, response_geometry=response_geometry, physical_frequency=physical_frequency)
-                doppler, coefficients = posterior['doppler'], posterior['fit_result']['coefficients']
-                new_bases = builder.build(doppler)[:, :, :, core_indices]
-                new_sources = reconstruct_waveform(coefficients, new_bases)
-                source_snr = np.sqrt(np.maximum(noise_inner_product(new_sources, new_sources, inverse, T_obs, fs), 0.))
-                assessment_data = data.copy()
-                # Fits share the round snapshot, but acceptance is conditional on
-                # already proposed components to avoid subtracting a sideband twice.
-                if proposal_doppler:
-                    points, amplitudes = np.concatenate(proposal_doppler), np.concatenate(proposal_coefficients)
-                    nearby = abs(points[:, 0] - center) <= .5 * np.ptp(block_range) + 2 * padding
-                    if np.any(nearby):
-                        pending = reconstruct_waveform(amplitudes[nearby],
-                            builder.build(points[nearby])[:, :, :, core_indices])
-                        assessment_data -= pending.sum(axis=0)
-                conditional_f = np.zeros(len(doppler))
-                for i in range(len(doppler)):
-                    conditional_data = assessment_data - new_sources.sum(axis=0) + new_sources[i]
-                    conditional_f[i] = amplitude_f_statistic(conditional_data, new_bases[i:i + 1],
-                        covariance, T_obs, fs)['two_f'][0] / 2
-                owned = (doppler[:, 0] >= block_range[0]) & ((doppler[:, 0] < block_range[1])
-                    | ((block_range[1] == frequency_range[1]) & (doppler[:, 0] == frequency_range[1])))
-                duplicate = np.zeros(len(doppler), dtype=bool)
-                previous_doppler = proposal_doppler if round_number == 1 else accepted_doppler + proposal_doppler
-                previous_coefficients = proposal_coefficients if round_number == 1 else accepted_coefficients + proposal_coefficients
-                if previous_doppler:
-                    points, amplitudes = np.concatenate(previous_doppler), np.concatenate(previous_coefficients)
-                    nearby = abs(points[:, 0] - center) <= .5 * np.ptp(block_range) + 2 * padding
-                    if np.any(nearby):
-                        previous = reconstruct_waveform(amplitudes[nearby],
-                            builder.build(points[nearby])[:, :, :, core_indices])
-                        overlap = noise_inner_product(new_sources[:, None], previous[None, :], inverse, T_obs, fs)
-                        norm = np.sqrt(np.maximum(noise_inner_product(new_sources, new_sources, inverse, T_obs, fs)[:, None]
-                            * noise_inner_product(previous, previous, inverse, T_obs, fs)[None, :], 1.e-300))
-                        duplicate |= np.any(overlap / norm > .9, axis=1)
-                retained = owned & ~duplicate & np.isfinite(source_snr) & (source_snr > SNR_r_threshold) & (conditional_f >= F_threshold)
-                # Deduplicate the fitted components using measured waveform overlap.
-                for i in np.argsort(source_snr)[::-1]:
-                    if not retained[i]:
-                        continue
-                    for j in np.flatnonzero(retained):
-                        if j == i or source_snr[j] > source_snr[i] or (source_snr[j] == source_snr[i] and j < i):
-                            continue
-                        overlap = noise_inner_product(new_sources[i], new_sources[j], inverse, T_obs, fs)
-                        if overlap / max(source_snr[i] * source_snr[j], 1.e-300) > .9:
-                            retained[j], duplicate[j] = False, True
-                retained_sum = new_sources[retained].sum(axis=0)
-                improvement = float(noise_inner_product(assessment_data, assessment_data, inverse, T_obs, fs)
-                    - noise_inner_product(assessment_data - retained_sum, assessment_data - retained_sum, inverse, T_obs, fs))
-                accepted = np.any(retained) and improvement > 0
-                status[block_index] = 'proposed' if accepted else 'fit_rejected_by_data'
-                # Step 7. associate recovered sources with catalogue labels.
-                # Catalogue reads happen after inference and have no acceptance role.
-                if round_number == 1 and np.count_nonzero(selected_counts) == 1:
-                    with h5py.File(snr_file, 'r') as saved:
-                        truth_frequency = saved['catalogue'][:, fields['f']]
-                        chirp = saved['catalogue'][:, fields['df']]
-                    maximum_drift = float(np.max(abs(chirp) * T_obs + abs(truth_frequency) * 1.e-4 + 8 / T_obs))
-                    truth_order = np.argsort(truth_frequency, kind='stable')
-                    truth_frequency = truth_frequency[truth_order]
-                # Truth is consulted only after fitting, and cached on disk for this block.
-                truth_cache = work / f'truth_{key}.h5'
-                if truth_cache.exists():
-                    with h5py.File(truth_cache, 'r') as saved:
-                        truth_ids = saved['dwd_id'][:]
-                        truth_waveforms = saved['source_xyz_fd'][:]
-                else:
-                    truth_low, truth_high = block_range + np.array([-2304., 2304.]) / T_obs
-                    first, last = np.searchsorted(truth_frequency, [truth_low - maximum_drift, truth_high + maximum_drift])
-                    nearby_indices = np.sort(truth_order[first:last])
-                    with h5py.File(snr_file, 'r') as saved:
-                        records = saved['catalogue'][nearby_indices]
-                    frequency = records[:, fields['f']]
-                    end = frequency + records[:, fields['df']] * T_obs
-                    margin = np.maximum(frequency, end) * 1.e-4 + 8 / T_obs
-                    nearby = (np.minimum(frequency, end) - margin <= truth_high) & (np.maximum(frequency, end) + margin >= truth_low)
-                    truth_rows = records[nearby]
-                    truth_ids = truth_rows[:, 0].astype(np.int64)
-                    truth_doppler = truth_rows[:, [fields[name] for name in ('f', 'df', 'longitude', 'latitude')]]
-                    cos_iota = np.cos(truth_rows[:, fields['iota']])
-                    truth_coefficients = physical_amplitude_coordinates(truth_rows[:, fields['A']] * (1 + cos_iota**2),
-                        2 * truth_rows[:, fields['A']] * cos_iota, truth_rows[:, fields['psi_bme']], truth_rows[:, fields['phi0']]) / 1.e-22
-                    truth_waveforms = np.empty((len(truth_ids), 3, len(retained_bins)), dtype=complex)
-                    for first in range(0, len(truth_ids), 32):
-                        truth_waveforms[first:first + 32] = reconstruct_waveform(truth_coefficients[first:first + 32],
-                            builder.build(truth_doppler[first:first + 32])[:, :, :, core_indices])
-                    with h5py.File(truth_cache, 'w') as saved:
-                        saved.create_dataset('dwd_id', data=truth_ids)
-                        saved.create_dataset('source_xyz_fd', data=truth_waveforms)
-                truth_association = assign_bank_ids(new_sources, truth_waveforms, truth_ids, inverse, T_obs, fs, minimum_overlap=.9)
-                matched = truth_association['matched_dwd_id'].copy()
-                physical = physical_amplitudes(coefficients)
-                parameters = np.column_stack((physical['A'], doppler[:, 0], doppler[:, 1], physical['phi0'],
-                    physical['iota'], doppler[:, 2], doppler[:, 3], physical['psi_bme']))
-                block_data.update(catalogue_association=dict(matched_dwd_id=matched,
-                    best_overlap=truth_association['best_overlap'], scope='Post-fit labels only; unmatched fits may be subtracted.'),
-                    # Step 8. record the accepted fits.
-                    acceptance=dict(source_snr=source_snr, conditional_f=conditional_f,
-                        owned_by_block=owned, duplicate_previous_or_this_round=duplicate,
-                        retained=retained, likelihood_improvement=improvement),
-                    recovery=dict(doppler=doppler, coefficients=coefficients, parameters=parameters, source_xyz_fd=new_sources),
-                    rjmcmc={name: value for name, value in posterior.items() if name not in ('bases', 'fit_result', 'checkpoint_file')})
-                block_attributes.update(proposed_for_subtraction=accepted,
-                    source_xyz_fd_scope='Frequency-domain fitting and post-fit association only.')
-                if accepted:
-                    retained_ids = matched[retained].copy()
-                    if round_number == 1 and not np.any(accepted_counts):
-                        next_unknown_id = -1
-                    if round_number == 1:
-                        used_labels = np.concatenate(proposal_ids) if proposal_ids else np.empty(0, dtype=np.int64)
-                    else:
-                        used_labels = np.concatenate(accepted_ids + proposal_ids)
-                    for i in range(len(retained_ids)):
-                        if retained_ids[i] < 0 or retained_ids[i] in used_labels or retained_ids[i] in retained_ids[:i]:
-                            retained_ids[i] = next_unknown_id
-                            next_unknown_id -= 1
-                    proposals.append(parameters[retained])
-                    proposal_doppler.append(doppler[retained])
-                    proposal_coefficients.append(coefficients[retained])
-                    proposal_ids.append(retained_ids)
-                    proposal_blocks.append(np.full(np.count_nonzero(retained), block_index, dtype=np.int64))
-                    accepted_counts[block_index] = np.count_nonzero(retained)
-                snapshots = {}
-                for path in sorted(checkpoints.glob('*.h5')):
-                    with h5py.File(path, 'r') as saved:
-                        snapshots[path.stem] = read_checkpoint(saved)
-                with h5py.File(output_file, 'a') as saved:
-                    group = saved[f'rounds/{label}/blocks'].create_group(key)
-                    _save_tree(group, block_data)
-                    group.attrs.update(block_attributes)
-                    checkpoint_group = group.create_group('checkpoints')
-                    for name, snapshot in snapshots.items():
-                        write_checkpoint(checkpoint_group.create_group(name), snapshot)
-                    group['rjmcmc'].attrs['checkpoint_group'] = f'/rounds/{label}/blocks/{key}/checkpoints'
-            else:
-                with h5py.File(output_file, 'a') as saved:
-                    group = saved[f'rounds/{label}/blocks'].create_group(key)
-                    _save_tree(group, block_data)
-                    group.attrs.update(block_attributes)
-        # Step 9. subtract the combined time-domain TDI signal.
-        if round_number == 1:
-            accepted_parameters, accepted_doppler, accepted_coefficients, accepted_ids, accepted_blocks = [], [], [], [], []
-            accumulated_xyz_td = np.zeros_like(total_xyz_td)
-            residual_xyz_td, residual_xyz_fd = total_xyz_td.copy(), total_xyz_fd
-        # Only here may the residual change: one waveform/TDI sum for all accepted blocks.
-        if proposals:
-            parameters = np.concatenate(proposals)
-            print(f'  Subtract {len(parameters)} fitted DWDs from {np.count_nonzero(accepted_counts)} blocks together.', flush=True)
-            links = DWD_simulation_gpu(parameters, detector_config)
-            response_model = lisagwresponse.GalacticBinary(A=1., f=.003, ra=0., dec=0.,
-                orbits=str(orbit_file), orbit_interp_order=5, shift_sun='never')
-            links_file = work / 'recovered_links.h5'
-            with h5py.File(links_file, 'w') as saved:
-                response_model.init_response_file(saved, detector_config['dt'], len(links), -2 * N_day / fs, 'tcb')
-                saved['tcb/y'][:] = links
-            del links
-            instrument = lisainstrument.Instrument(
-                **{name: value for name, value in detector_config.items()
-                   if name not in ('T_obs', 'gpu_batch_size', 'minimum_envelope_samples', 'include_padding')},
-                gws=str(links_file), size=N + 2 * N_day, t0=-N_day / fs)
-            instrument.disable_all_noises()
-            instrument.disable_dopplers()
-            data = pytdi.Data.from_instrument(instrument.export_numpy_full())
-            new_xyz_td = tdi_gpu(data.measurements, data.args, keep=slice(N_day, N_day + N)) / instrument.central_freq
-            accumulated_xyz_td += new_xyz_td
-            residual_xyz_td = total_xyz_td - accumulated_xyz_td
-            residual_xyz_fd = np.fft.rfft(residual_xyz_td, axis=-1)
-            del data, instrument, response_model, new_xyz_td
-            accepted_parameters.append(parameters)
-            accepted_doppler.extend(proposal_doppler)
-            accepted_coefficients.extend(proposal_coefficients)
-            accepted_ids.extend(proposal_ids)
-            accepted_blocks.extend(proposal_blocks)
-            last_accepted_round = round_number
-            status[status == b'proposed'] = 'accepted'
-        # Step 10. record the round and decide whether to continue.
-        recovered_ids = np.concatenate(accepted_ids) if accepted_ids else np.empty(0, dtype=np.int64)
-        round_summary = dict(block_status=status, selected_count=selected_counts, accepted_count=accepted_counts,
-            recovered_dwd_id=recovered_ids)
+                if label in saved['rounds']:
+                    del saved[f'rounds/{label}']
+                _save_tree(saved['rounds'].create_group(label), round_summary)
+                elapsed_seconds = perf_counter() - round_start
+                saved[f'rounds/{label}'].create_dataset('elapsed_seconds', data=elapsed_seconds)
+                saved.attrs['last_completed_round'] = round_number
+            run_status['finalized_round_counts'][label] = int(round_summary['identified_dwd_count'])
+            run_status.update(phase='round_complete', last_completed_round=round_number,
+                finalized_identified_dwd_count=int(len(np.unique(recovered_ids))),
+                last_round_subtracted_components=int(len(dwd_recover_table)))
+            write_run_status(status_file, **run_status)
+            print(f'Round {label}: {elapsed_seconds:.1f} s, identified {round_summary["identified_dwd_count"]} DWDs, '
+                f'subtracted {len(dwd_recover_table)} components, cumulative unique DWDs {len(np.unique(recovered_ids))}', flush=True)
+            if not len(dwd_recover_table):
+                break
+        dwd_recover_table = np.concatenate(accepted_parameters) if accepted_parameters else np.empty((0, 8))
+        run_status.update(phase='writing_final_outputs')
+        write_run_status(status_file, **run_status)
+        with h5py.File(observation_file, 'r') as saved:
+            signal_xyz_td = saved['observation/total_xyz_td'][:]
+        signal_xyz_td -= lisa_data_td[1:]
+        final_data = dict(signal_xyz_td=signal_xyz_td, residual_xyz_td=lisa_data_td[1:],
+            signal_xyz_fd=np.fft.rfft(signal_xyz_td, axis=-1), residual_xyz_fd=lisa_data_fd[1:],
+            lisa_data_td=lisa_data_td, lisa_data_fd=lisa_data_fd,
+            parameters=dwd_recover_table, dwd_id=recovered_ids, recovered_dwd_id=np.unique(recovered_ids),
+            block_index=np.concatenate(accepted_blocks) if accepted_blocks else np.empty(0, dtype=np.int64))
+        stopping_reason = 'no_new_candidates' if not np.any(template_number) else 'no_identified_components'
         with h5py.File(output_file, 'a') as saved:
-            group = saved[f'rounds/{label}']
-            _save_tree(group, round_summary)
-            group.attrs.update(complete=True, committed=bool(proposals), visited_block_count=selected_block_count,
-                selected_block_count=selected_block_count,
-                accepted_block_count=int(np.count_nonzero(accepted_counts)),
-                residual_output_sha256=hashlib.sha256(residual_xyz_fd.tobytes()).hexdigest())
-            for block_index in np.flatnonzero(accepted_counts):
-                saved[f'rounds/{label}/blocks/{block_index:05d}'].attrs.update(accepted_for_subtraction=True,
-                    subtraction_backend='DWD_simulation_gpu + native Instrument + tdi_gpu')
-            saved.attrs.update(last_completed_round=round_number, last_accepted_round=last_accepted_round)
-        if not proposals:
-            stopping_reason = 'no_new_candidates' if not np.any(selected_counts) else 'no_accepted_blocks'
-            break
-# Step 11. save the final results.
-parameters = np.concatenate(accepted_parameters) if accepted_parameters else np.empty((0, 8))
-ids = np.concatenate(accepted_ids) if accepted_ids else np.empty(0, dtype=np.int64)
-final_data = dict(signal_xyz_td=accumulated_xyz_td, residual_xyz_td=residual_xyz_td,
-    signal_xyz_fd=np.fft.rfft(accumulated_xyz_td, axis=-1), residual_xyz_fd=residual_xyz_fd,
-    parameters=parameters, dwd_id=ids,
-    doppler=np.concatenate(accepted_doppler) if accepted_doppler else np.empty((0, 4)),
-    coefficients=np.concatenate(accepted_coefficients) if accepted_coefficients else np.empty((0, 4)),
-    block_index=np.concatenate(accepted_blocks) if accepted_blocks else np.empty(0, dtype=np.int64))
-with h5py.File(output_file, 'a') as saved:
-    _save_tree(saved.create_group('final_subtraction'), final_data)
-    saved['final_subtraction'].attrs['accepted_round'] = last_accepted_round
-    saved.attrs.update(complete=True, single_file_complete=True, stopping_reason=stopping_reason,
-        stopping_condition_met=True, iteration_stable=False)
-shutil.rmtree(work)
-print(f'Saved {output_file}: {round_number} global rounds, {len(parameters)} accepted components; {stopping_reason}.', flush=True)
-pipeline_result = dict(output_file=str(output_file), rounds=round_number, source_count=len(parameters),
+            if 'final_subtraction' in saved:
+                del saved['final_subtraction']
+            _save_tree(saved.create_group('final_subtraction'), final_data)
+            saved.attrs.update(complete=True, stopping_reason=stopping_reason)
+        run_status.update(phase='complete', complete=True, stopping_reason=stopping_reason)
+        write_run_status(status_file, **run_status)
+        pipeline_result = dict(output_file=str(output_file), rounds=round_number, source_count=len(dwd_recover_table),
             selected_block_indices=selected_block_indices.tolist(), total_block_count=block_count,
-            last_accepted_round=last_accepted_round, stopping_reason=stopping_reason)
+            stopping_reason=stopping_reason)

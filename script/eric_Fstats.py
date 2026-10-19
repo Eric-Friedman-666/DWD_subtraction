@@ -17,6 +17,7 @@ from scipy.optimize import least_squares
 
 from script.eric_preprocess import inner_product
 from script.native_lisa_filter import native_signal_filter
+from script.dwd_frequency_support import response_grid, response_sample_block
 from script.spectrum import dwd_xyz_response, dwd_xyz_response_fd, prepare_xyz_geometry
 
 
@@ -312,14 +313,14 @@ def physical_amplitudes(coefficients):
                 phi0=(-.5*(np.angle(plus)+np.angle(minus)))%(2*np.pi))
 
 
-def build_response(output,wide_frequency,duration,rate,*,orbit_file=None):
+def build_response(output,physical_frequency,duration,rate,*,orbit_file=None):
     model = lisagwresponse.GalacticBinary(A=1.,f=.001,ra=0.,dec=0.,orbits=str(output/'orbit.h5' if orbit_file is None else orbit_file),
                                          orbit_interp_order=5,shift_sun='never')
-    times = np.arange(int(round(duration/3600)))*3600+.5*(int(round(3600*rate))-1)/rate
+    times = response_grid(duration, rate)
     geometry = prepare_xyz_geometry(times,model)
     # This instance builds waveforms only. Each posterior uses its own measured covariance.
-    builder = import_module('script.eric_generate_waveform').GPUResponse(np.broadcast_to(np.eye(3),(len(wide_frequency),3,3)),
-                          np.zeros((3,len(wide_frequency)),complex),times,geometry,wide_frequency,duration,rate)
+    builder = import_module('script.eric_generate_waveform').GPUResponse(np.broadcast_to(np.eye(3),(len(physical_frequency),3,3)),
+                          np.zeros((3,len(physical_frequency)),complex),times,geometry,physical_frequency,duration,rate)
     return builder,times,geometry
 
 
@@ -337,6 +338,7 @@ def response_to_frequency_domain(envelope, source_frequency, *, physical_frequen
     signal_filter_amplitude, _ = native_signal_filter(physical_frequency, detector_sampling_rate)
     envelope = np.asarray(envelope)
     source_frequency = np.asarray(source_frequency, dtype=np.float64)
+    sample_block = response_sample_block(response_times, observation_duration, detector_sampling_rate)
     transformed = np.zeros(
         (len(source_frequency), 3, len(physical_frequency)),
         dtype=np.complex128,
@@ -347,9 +349,9 @@ def response_to_frequency_domain(envelope, source_frequency, *, physical_frequen
         fractional_bin = frequency_value * observation_duration - carrier_bin
         native_bins = np.rint(physical_frequency * observation_duration).astype(np.int64)
         block_factor = (
-            int(round(3600.0 * detector_sampling_rate))
+            sample_block
             * np.sinc(
-                int(round(3600.0 * detector_sampling_rate))
+                sample_block
                 * frequency_offset
                 * detector_sample_interval
             )

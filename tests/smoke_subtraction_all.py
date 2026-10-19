@@ -109,7 +109,7 @@ try:
     def checked_sampler(*args, **kwargs):
         assert kwargs['chirp_coordinate'] == 'linear'
         sampler_calls.append(dict(frequency_range=np.asarray(args[3]).tolist(), initial_count=len(args[2]),
-            derivative_bounds=np.asarray(args[4]).tolist(), covariance_readonly=not args[1].flags.writeable))
+            derivative_bounds=np.asarray(args[4]).tolist()))
         return original_sampler(*args, **kwargs)
 
     eric_generate_waveform.tdi_gpu = checked_tdi

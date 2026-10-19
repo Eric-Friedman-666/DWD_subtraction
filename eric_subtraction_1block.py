@@ -231,7 +231,6 @@ with single_cpu(),GPUUsageRecorder(telemetry_file) as monitor:
         fixed_covariance = estimate['covariance'][core_indices].copy()
         fixed_inverse = np.linalg.inv(fixed_covariance)
         digest = hashlib.sha256(fixed_covariance.tobytes()).hexdigest()
-        fixed_covariance.setflags(write=False)
 
         # -----------------------------------------------------------
         # Step 9. Re-screen the unchanged bank on the current residual
