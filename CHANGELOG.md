@@ -1,5 +1,16 @@
 # Change log
 
+## 2026-10-22
+
+- Synchronize the complete active OzSTAR scientific Python source, including simulation/SNR entrypoints, global and single-bank workflows, sampler/waveform helpers, reference cache, status writer and worker supervisor. Preserve the public repository's flat source layout.
+- Publish the current main-guarded controller initialization and native three-channel residual handling; preserve the source's current validation/error-handling behavior without introducing publication-only scientific fixes.
+- Synchronize matching deployed test modules. Retain other portable/historical tests without claiming they all pass for this snapshot.
+- Update the portable launcher to the deployed seven-day resource limit and CUDA/cache environment defaults. Keep four A100 GPUs as its default and document a submission-only one-GPU override.
+- Record file-level source provenance and fresh static/launcher-only checks. Retain the previous check report separately, preserve the unchanged prebuilt CUDA helper and third-party notices, and exclude all data, environments and run products.
+- Do not modify OzSTAR deployment source, queued/running jobs or their outputs; no scientific or GPU validation was executed for this publication.
+
+Scientific controller SHA-256: d03fe8a35c40e249c083b57b55a3835492a74bffd5b7640efd3a4ca0fed01ad7.
+
 ## 2026-10-20
 
 - Publish the frozen frequency-dependent signed-log-magnitude chirp policy and matching per-bank padding, preserving ownership edges, the nonzero gap and the 4e-12 Hz/s global ceiling.

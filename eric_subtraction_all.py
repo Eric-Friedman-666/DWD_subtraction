@@ -8,6 +8,7 @@ from multiprocessing.shared_memory import SharedMemory
 from multiprocessing.util import Finalize
 import json
 import os
+import sys
 import pickle
 os.environ.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')
 import h5py
@@ -36,111 +37,10 @@ from script.dwd_chirp_policy import (
 )
 from eric_rjmcmc import run_eryn_rjmcmc
 from script.tool import _save_tree
-if __name__ == '__main__':
-    # Step 2. Configure the subtraction.
-    orbit_file = Path('./data/dwd_observation_full_catalogue.orbits.h5')
-    snr_file = Path('./data/ldc_dwd_data.h5')
-    observation_file = Path('./data/dwd_observation_full_catalogue.h5')
-    output_file = Path(os.environ.get('DWD_SUBTRACTION_OUTPUT', './data/dwd_subtraction_all.h5'))
-    frequency_range = (1.e-4, .05)
-    freq_block_width = 1.e-5
-    frequency_derivative_bounds = np.array([[-4.e-12, -7.60863249122299e-23],
-                                          [7.60863249122299e-23, 4.e-12]])
-    subtraction_frequency_range = None
-    SNR_r_threshold = 7.
-    F_threshold = 16.
-    maximum_sources = 100
-    amplitude_prior_sigma = .1
-    refit_identified_amplitudes = True
-    sample_number = (500, 1500)
-    block_processes = int(os.environ.get('DWD_BLOCK_WORKERS', '3'))
-    worker_progress_timeout = float(os.environ.get('DWD_WORKER_PROGRESS_TIMEOUT', '600'))
-    worker_max_attempts = int(os.environ.get('DWD_WORKER_MAX_ATTEMPTS', '3'))
-    worker_gpu_memory_fraction = float(os.environ.get('DWD_WORKER_GPU_MEM_FRACTION', '.045'))
-    gpu_devices = tuple(os.environ.get('DWD_GPU_DEVICES', os.environ.get('CUDA_VISIBLE_DEVICES', '0')).split(','))
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    status_file = output_file.with_suffix('.status.json')
-    run_status = dict(phase='loading_observation', current_round=None, last_completed_round=0,
-        complete=False, relative_snr_threshold=SNR_r_threshold,
-        configured_workers=block_processes * len(gpu_devices),
-        worker_progress_timeout_s=worker_progress_timeout, worker_max_attempts=worker_max_attempts,
-        worker_gpu_memory_fraction=worker_gpu_memory_fraction,
-        worker_execution='supervised_single_use_spawn',
-        finalized_identified_dwd_count=0, finalized_round_counts={})
-    write_run_status(status_file, **run_status)
-    with h5py.File(observation_file, 'r') as saved:
-        T_obs = saved['observation'].attrs['duration']
-        fs = saved['observation'].attrs['rate']
-        detector_config = json.loads(saved['observation'].attrs['detector_config'])
-    detector_config['orbits'] = str(orbit_file)
-    # Step 3. Read the observation and prepare shared inputs.
-    N = int(round(T_obs * fs))
-    lisa_data_td = np.empty((4, N))
-    lisa_data_td[0] = np.arange(N) / fs
-    with h5py.File(observation_file, 'r') as saved:
-        saved['observation/total_xyz_td'].read_direct(lisa_data_td[1:])
-    lisa_data_fd = np.vstack((np.fft.rfftfreq(N, d=1 / fs), np.fft.rfft(lisa_data_td[1:], axis=-1)))
-    with h5py.File(snr_file, 'r') as saved:
-        dwd_template_table = saved['catalogue'][saved['catalogue'][:, 10] > SNR_r_threshold]
-    frequency_blocks = np.arange(
-        frequency_range[0], frequency_range[1] - freq_block_width * 1.e-10, freq_block_width,
-    )[:, None] + np.array([0., freq_block_width])
-    frequency_blocks[-1, 1] = frequency_range[1]
-    block_count = len(frequency_blocks)
-    block_indices = np.arange(block_count, dtype=np.int64)
-    subtraction_range = np.array(frequency_range) if subtraction_frequency_range is None else np.asarray(subtraction_frequency_range)
-    selected_block_indices = block_indices[
-        (frequency_blocks[:, 0] >= subtraction_range[0] - freq_block_width * 1.e-10)
-        & (frequency_blocks[:, 1] <= subtraction_range[1] + freq_block_width * 1.e-10)]
-    selected_block_count = len(selected_block_indices)
-    fields = dict(A=1, f=2, df=3, phi0=4, iota=5, longitude=6, latitude=7, psi_bme=8)
-    block_range = frequency_blocks[selected_block_indices[0]]
-    frequency_derivative_bounds_by_block = frequency_dependent_chirp_bounds(
-        frequency_blocks, frequency_derivative_bounds)
-    frequency_padding_hz = frequency_dependent_padding(
-        T_obs, freq_block_width, frequency_blocks, frequency_derivative_bounds_by_block)
-    bank_configuration = bank_configuration_record(T_obs, freq_block_width,
-        frequency_blocks, frequency_derivative_bounds,
-        frequency_derivative_bounds_by_block, frequency_padding_hz)
-    write_run_status(output_file.parent / 'frequency_banks.settings.json',
-        **bank_configuration)
-    run_status.update(chirp_bounds_policy=bank_configuration['policy']['name'],
-        chirp_bounds_policy_sha256=bank_configuration['policy_sha256'])
-    padding = frequency_padding_hz[selected_block_indices[0]]
-    retained_bins = np.flatnonzero((lisa_data_fd[0].real >= block_range[0] - padding)
-        & (lisa_data_fd[0].real <= block_range[1] + padding) & (lisa_data_fd[0].real > 0))
-    _, response_times, response_geometry = build_response(
-        output_file.parent, lisa_data_fd[0, retained_bins].real, T_obs, fs, orbit_file=orbit_file)
-    configuration = dict(duration=T_obs, rate=fs, frequency_range=frequency_range,
-        frequency_blocks_hz=frequency_blocks, block_indices=block_indices, frequency_block_width=freq_block_width,
-        subtraction_frequency_range=subtraction_range, selected_block_indices=selected_block_indices,
-        derivative_bounds=frequency_derivative_bounds,
-        derivative_bounds_by_block=frequency_derivative_bounds_by_block,
-        chirp_bounds_policy=bank_configuration['policy'],
-        chirp_bounds_policy_sha256=bank_configuration['policy_sha256'],
-        chirp_coordinate='linear', f_threshold=F_threshold,
-        chirp_prior='positive_log_uniform' if frequency_derivative_bounds.ndim == 1 else 'signed_log_uniform',
-        likelihood_frequency_padding_hz=frequency_padding_hz,
-        response_step_seconds=RESPONSE_STEP_SECONDS,
-        relative_snr_threshold=SNR_r_threshold, sample_number=sample_number, maximum_sources=maximum_sources,
-        amplitude_prior_sigma=amplitude_prior_sigma, block_processes_per_gpu=block_processes,
-        worker_gpu_memory_fraction=worker_gpu_memory_fraction,
-        amplitude_refit='joint_nonnegative_winner_only_fixed_shape_scale' if refit_identified_amplitudes else 'none',
-        gpu_devices=','.join(gpu_devices), strong_reporting_snr_threshold=7.,
-        relative_snr_source='fixed_saved_catalogue', identification_template_scope='remaining_same_block_input_bank', subtraction_policy='identified_only', exclude_recovered_templates=True)
-    with h5py.File(output_file, 'a') as saved:
-        if saved.attrs.get('complete', False):
-            print(f'Already complete: {output_file}', flush=True)
-            raise SystemExit(0)
-        if 'config' not in saved:
-            _save_tree(saved.create_group('config'), configuration)
-            saved.create_group('rounds')
 def initialize_worker(inputs, shared_arrays, gpu_devices=None):
     global worker_inputs, lisa_data_fd, effective_noise_covariance
     if gpu_devices is not None:
         assigned_gpu = os.environ.get('DWD_ASSIGNED_GPU')
-        if assigned_gpu is not None and assigned_gpu not in gpu_devices:
-            raise ValueError('Supervisor assigned a GPU outside the declared device set')
         worker_index = int(os.environ.get('DWD_WORKER_SLOT_INDEX',
             current_process()._identity[-1] - 1))
         os.environ['CUDA_VISIBLE_DEVICES'] = (assigned_gpu if assigned_gpu is not None
@@ -218,18 +118,104 @@ def single_block_process(block_index, dwd_template_table, *, work, label):
     (checkpoints / 'result.partial').replace(result_file)
     return dwd_recover_table, filter_result, retained_bins, posterior
 if __name__ == '__main__':
+    # Step 2. Configure the subtraction.
+    orbit_file = Path('./data/dwd_observation_full_catalogue.orbits.h5')
+    snr_file = Path('./data/ldc_dwd_data.h5')
+    observation_file = Path('./data/dwd_observation_full_catalogue.h5')
+    output_file = Path(os.environ.get('DWD_SUBTRACTION_OUTPUT', './data/dwd_subtraction_all.h5'))
+    frequency_range = (1.e-4, .05)
+    freq_block_width = 1.e-5
+    frequency_derivative_bounds = np.array([[-4.e-12, -7.60863249122299e-23],
+                                          [7.60863249122299e-23, 4.e-12]])
+    SNR_r_threshold = 7.
+    F_threshold = 16.
+    maximum_sources = 100
+    amplitude_prior_sigma = .1
+    refit_identified_amplitudes = True
+    sample_number = (500, 1500)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    status_file = output_file.with_suffix('.status.json')
+    run_status = dict(phase='loading_observation', current_round=None, last_completed_round=0,
+        complete=False, relative_snr_threshold=SNR_r_threshold,
+        block_processes_per_gpu=int(os.environ.get('DWD_BLOCK_WORKERS', '3')),
+        worker_progress_timeout_s=float(os.environ.get('DWD_WORKER_PROGRESS_TIMEOUT', '600')),
+        worker_max_attempts=int(os.environ.get('DWD_WORKER_MAX_ATTEMPTS', '3')),
+        worker_gpu_memory_fraction=float(os.environ.get('DWD_WORKER_GPU_MEM_FRACTION', '.045')),
+        gpu_devices=tuple(os.environ.get('DWD_GPU_DEVICES', os.environ.get('CUDA_VISIBLE_DEVICES', '0')).split(',')),
+        worker_execution='supervised_single_use_spawn',
+        finalized_identified_dwd_count=0, finalized_round_counts={})
+    run_status['configured_workers'] = run_status['block_processes_per_gpu'] * len(run_status['gpu_devices'])
+    write_run_status(status_file, **run_status)
+    with h5py.File(observation_file, 'r') as saved:
+        T_obs = saved['observation'].attrs['duration']
+        fs = saved['observation'].attrs['rate']
+        detector_config = json.loads(saved['observation'].attrs['detector_config'])
+    detector_config['orbits'] = str(orbit_file)
+    # Step 3. Read the observation and prepare shared inputs.
+    N = int(round(T_obs * fs))
+    with h5py.File(observation_file, 'r') as saved:
+        lisa_data_td = saved['observation/total_xyz_td'][:]
+    lisa_data_fd = np.vstack((np.fft.rfftfreq(N, d=1 / fs), np.fft.rfft(lisa_data_td, axis=-1)))
+    with h5py.File(snr_file, 'r') as saved:
+        dwd_template_table = saved['catalogue'][saved['catalogue'][:, 10] > SNR_r_threshold]
+    frequency_blocks = np.arange(frequency_range[0], frequency_range[1] - freq_block_width * 1.e-10, freq_block_width)[:, None] + np.array([0., freq_block_width])
+    frequency_blocks[-1, 1] = frequency_range[1]
+    block_count = len(frequency_blocks)
+    block_indices = np.arange(block_count, dtype=np.int64)
+    fields = dict(A=1, f=2, df=3, phi0=4, iota=5, longitude=6, latitude=7, psi_bme=8)
+    block_range = frequency_blocks[block_indices[0]]
+    frequency_derivative_bounds_by_block = frequency_dependent_chirp_bounds(
+        frequency_blocks, frequency_derivative_bounds)
+    frequency_padding_hz = frequency_dependent_padding(
+        T_obs, freq_block_width, frequency_blocks, frequency_derivative_bounds_by_block)
+    bank_configuration = bank_configuration_record(T_obs, freq_block_width,
+        frequency_blocks, frequency_derivative_bounds,
+        frequency_derivative_bounds_by_block, frequency_padding_hz)
+    write_run_status(output_file.parent / 'frequency_banks.settings.json',
+        **bank_configuration)
+    run_status.update(chirp_bounds_policy=bank_configuration['policy']['name'],
+        chirp_bounds_policy_sha256=bank_configuration['policy_sha256'])
+    padding = frequency_padding_hz[block_indices[0]]
+    retained_bins = np.flatnonzero((lisa_data_fd[0].real >= block_range[0] - padding)
+        & (lisa_data_fd[0].real <= block_range[1] + padding) & (lisa_data_fd[0].real > 0))
+    _, response_times, response_geometry = build_response(
+        output_file.parent, lisa_data_fd[0, retained_bins].real, T_obs, fs, orbit_file=orbit_file)
+    configuration = dict(duration=T_obs, rate=fs, frequency_range=frequency_range,
+        frequency_blocks_hz=frequency_blocks, block_indices=block_indices, frequency_block_width=freq_block_width,
+        subtraction_frequency_range=np.array(frequency_range), selected_block_indices=block_indices,
+        derivative_bounds=frequency_derivative_bounds,
+        derivative_bounds_by_block=frequency_derivative_bounds_by_block,
+        chirp_bounds_policy=bank_configuration['policy'],
+        chirp_bounds_policy_sha256=bank_configuration['policy_sha256'],
+        chirp_coordinate='linear', f_threshold=F_threshold,
+        chirp_prior='positive_log_uniform' if frequency_derivative_bounds.ndim == 1 else 'signed_log_uniform',
+        likelihood_frequency_padding_hz=frequency_padding_hz,
+        response_step_seconds=RESPONSE_STEP_SECONDS,
+        relative_snr_threshold=SNR_r_threshold, sample_number=sample_number, maximum_sources=maximum_sources,
+        amplitude_prior_sigma=amplitude_prior_sigma, block_processes_per_gpu=run_status['block_processes_per_gpu'],
+        worker_gpu_memory_fraction=run_status['worker_gpu_memory_fraction'],
+        amplitude_refit='joint_nonnegative_winner_only_fixed_shape_scale' if refit_identified_amplitudes else 'none',
+        gpu_devices=','.join(run_status['gpu_devices']), strong_reporting_snr_threshold=7.,
+        relative_snr_source='fixed_saved_catalogue', identification_template_scope='remaining_same_block_input_bank', subtraction_policy='identified_only', exclude_recovered_templates=True)
+    with h5py.File(output_file, 'a') as saved:
+        if saved.attrs.get('complete', False):
+            print(f'Already complete: {output_file}', flush=True)
+            sys.exit(0)
+        if 'config' not in saved:
+            _save_tree(saved.create_group('config'), configuration)
+            saved.create_group('rounds')
     # Step 7. Fit all blocks, keep identified DWDs, subtract once, and repeat.
     work = output_file.with_suffix('.checkpoints').resolve()
     work.mkdir(parents=True, exist_ok=True)
-    run_status.update(phase='reference_cache', selected_block_count=selected_block_count)
+    run_status.update(phase='reference_cache', selected_block_count=block_count)
     write_run_status(status_file, **run_status)
     reference_template_tables = [dwd_template_table[
         (dwd_template_table[:, fields['f']] >= frequency_blocks[index, 0]) & (
         (dwd_template_table[:, fields['f']] < frequency_blocks[index, 1]) |
         ((index == block_count - 1) & (dwd_template_table[:, fields['f']] == frequency_blocks[index, 1])))]
-        for index in selected_block_indices]
+        for index in block_indices]
     reference_waveform_cache = precompute_reference_waveforms(work / 'reference_waveforms.h5',
-        selected_block_indices, reference_template_tables, frequency_blocks, freq_block_width,
+        block_indices, reference_template_tables, frequency_blocks, freq_block_width,
         lisa_data_fd[0].real, T_obs, fs, response_times, response_geometry,
         GPUResponse, physical_amplitude_coordinates, reconstruct_waveform,
         frequency_padding_hz=frequency_padding_hz,
@@ -244,8 +230,8 @@ if __name__ == '__main__':
             accepted_ids.append(group['dwd_id'][:])
             accepted_blocks.append(group['block_index'][:])
             if len(group['parameters']):
-                lisa_data_td[1:] -= group['signal_xyz_td'][:]
-    lisa_data_fd[1:] = np.fft.rfft(lisa_data_td[1:], axis=-1)
+                lisa_data_td -= group['signal_xyz_td'][:]
+    lisa_data_fd[1:] = np.fft.rfft(lisa_data_td, axis=-1)
     recovered_ids = np.concatenate(accepted_ids) if accepted_ids else np.empty(0, dtype=np.int64)
     run_status.update(last_completed_round=round_number,
         finalized_identified_dwd_count=int(len(np.unique(recovered_ids))))
@@ -270,7 +256,7 @@ if __name__ == '__main__':
         shared_arrays = dict(lisa_data_fd=(lisa_data_fd_memory.name, lisa_data_fd.shape, lisa_data_fd.dtype),
             effective_noise_covariance=(effective_noise_covariance_memory.name,
                 effective_noise_covariance.shape, effective_noise_covariance.dtype))
-        worker_count = block_processes * len(gpu_devices)
+        worker_count = run_status['block_processes_per_gpu'] * len(run_status['gpu_devices'])
         while True:
             round_start = perf_counter()
             round_number += 1
@@ -293,27 +279,27 @@ if __name__ == '__main__':
                 (dwd_template_table[:, fields['f']] >= frequency_blocks[index, 0]) & (
                 (dwd_template_table[:, fields['f']] < frequency_blocks[index, 1]) |
                 ((index == block_count - 1) & (dwd_template_table[:, fields['f']] == frequency_blocks[index, 1])))]
-                for index in selected_block_indices]
-            nonempty_indices = [int(index) for index, table in zip(selected_block_indices, block_template_tables) if len(table)]
+                for index in block_indices]
+            nonempty_indices = [int(index) for index, table in zip(block_indices, block_template_tables) if len(table)]
             run_status.update(phase='fitting_blocks', nonempty_input_block_indices=nonempty_indices,
-                empty_input_block_count=selected_block_count - len(nonempty_indices))
+                empty_input_block_count=block_count - len(nonempty_indices))
             write_run_status(status_file, **run_status)
-            block_jobs = ((index, table) for index, table in zip(selected_block_indices, block_template_tables)
+            block_jobs = ((index, table) for index, table in zip(block_indices, block_template_tables)
                 if len(table))
             function = partial(single_block_process, work=work, label=label)
             run_block_jobs(function, block_jobs, max_workers=worker_count,
-                initializer=initialize_worker, initargs=(worker_inputs, shared_arrays, gpu_devices),
-                work=work, label=label, progress_timeout=worker_progress_timeout,
-                max_attempts=worker_max_attempts, startup_ready_phase='f_screening',
+                initializer=initialize_worker, initargs=(worker_inputs, shared_arrays, run_status['gpu_devices']),
+                work=work, label=label, progress_timeout=run_status['worker_progress_timeout_s'],
+                max_attempts=run_status['worker_max_attempts'], startup_ready_phase='f_screening',
                 status_file=status_file, run_status=run_status,
-                gpu_devices=gpu_devices, workers_per_gpu=block_processes,
-                worker_gpu_memory_fraction=worker_gpu_memory_fraction)
+                gpu_devices=run_status['gpu_devices'], workers_per_gpu=run_status['block_processes_per_gpu'],
+                worker_gpu_memory_fraction=run_status['worker_gpu_memory_fraction'])
             run_status.update(phase='matching')
             write_run_status(status_file, **run_status)
             template_number, recovered_number, identified_number, ghost_number = np.zeros((4, block_count), dtype=np.int64)
             proposals, proposal_ids, proposal_blocks = [], [], []
             amplitude_refits = {}
-            for block_index, table in zip(selected_block_indices, block_template_tables):
+            for block_index, table in zip(block_indices, block_template_tables):
                 if not len(table):
                     continue
                 with (work / f'round_{label}_block_{block_index:05d}' / 'result.pkl').open('rb') as saved:
@@ -328,9 +314,6 @@ if __name__ == '__main__':
                 truth_ids = truth_rows[:, 0].astype(np.int64)
                 reference_bank = reference_waveform_cache[block_index]
                 remaining = np.isin(reference_bank['dwd_id'], truth_ids)
-                if (not np.array_equal(reference_bank['retained_bins'], retained_bins)
-                        or not np.array_equal(reference_bank['dwd_id'][remaining], truth_ids)):
-                    raise ValueError(f'Reference/checkpoint mismatch: block {block_index}')
                 truth_waveforms = reference_bank['waveforms'][remaining]
                 truth_association = assign_bank_ids(new_sources, truth_waveforms, truth_ids,
                     np.linalg.inv(covariance), T_obs, fs, minimum_overlap=.9)
@@ -378,8 +361,8 @@ if __name__ == '__main__':
                 instrument.disable_dopplers()
                 data = pytdi.Data.from_instrument(instrument.export_numpy_full())
                 new_xyz_td = tdi_gpu(data.measurements, data.args, keep=slice(N_day, N_day + N)) / instrument.central_freq
-                lisa_data_td[1:] -= new_xyz_td
-                lisa_data_fd[1:] = np.fft.rfft(lisa_data_td[1:], axis=-1)
+                lisa_data_td -= new_xyz_td
+                lisa_data_fd[1:] = np.fft.rfft(lisa_data_td, axis=-1)
                 round_summary['signal_xyz_td'] = new_xyz_td
                 del data, instrument, response_model
                 accepted_parameters.append(dwd_recover_table)
@@ -408,10 +391,10 @@ if __name__ == '__main__':
         write_run_status(status_file, **run_status)
         with h5py.File(observation_file, 'r') as saved:
             signal_xyz_td = saved['observation/total_xyz_td'][:]
-        signal_xyz_td -= lisa_data_td[1:]
-        final_data = dict(signal_xyz_td=signal_xyz_td, residual_xyz_td=lisa_data_td[1:],
+        signal_xyz_td -= lisa_data_td
+        final_data = dict(signal_xyz_td=signal_xyz_td, residual_xyz_td=lisa_data_td,
             signal_xyz_fd=np.fft.rfft(signal_xyz_td, axis=-1), residual_xyz_fd=lisa_data_fd[1:],
-            lisa_data_td=lisa_data_td, lisa_data_fd=lisa_data_fd,
+            lisa_data_td=np.vstack((np.arange(N) / fs, lisa_data_td)), lisa_data_fd=lisa_data_fd,
             parameters=dwd_recover_table, dwd_id=recovered_ids, recovered_dwd_id=np.unique(recovered_ids),
             block_index=np.concatenate(accepted_blocks) if accepted_blocks else np.empty(0, dtype=np.int64))
         stopping_reason = 'no_new_candidates' if not np.any(template_number) else 'no_identified_components'
@@ -423,5 +406,5 @@ if __name__ == '__main__':
         run_status.update(phase='complete', complete=True, stopping_reason=stopping_reason)
         write_run_status(status_file, **run_status)
         pipeline_result = dict(output_file=str(output_file), rounds=round_number, source_count=len(dwd_recover_table),
-            selected_block_indices=selected_block_indices.tolist(), total_block_count=block_count,
+            selected_block_indices=block_indices.tolist(), total_block_count=block_count,
             stopping_reason=stopping_reason)

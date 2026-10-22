@@ -1,0 +1,229 @@
+{
+  "publication_date": "2026-10-22",
+  "snapshot_verified_utc": "2026-10-22 08:10:10 UTC",
+  "source": "Active OzSTAR deployment source tree; read-only export",
+  "layout_mapping": "Deployed source/<path> is published as <path> at the repository root.",
+  "scientific_source_files_byte_identical": true,
+  "scientific_source_edited_for_publication": false,
+  "controller_sha256": "d03fe8a35c40e249c083b57b55a3835492a74bffd5b7640efd3a4ca0fed01ad7",
+  "deployed_launcher_sha256": "8d496076e6e42556d648d9ce2d446a4f9c9bbfee246c99635a41708d54c8c9a8",
+  "portable_launcher_sha256": "c45052148b9db0d78d871ead26b65756261237b03098e525f1e08f31fea66400",
+  "launcher_packaging": "Portable public launcher: deployment-specific account, paths and interpreter replaced by configurable settings; input/allocation guards retained. Resource defaults are four A100 GPUs, 64 CPUs, 256 GiB, seven days.",
+  "native_helper_recompiled": false,
+  "metadata_exception": "Existing public native-helper provenance and redistribution notice retained instead of private deployment-path metadata.",
+  "scientific_payloads_excluded": true,
+  "remote_deployment_modified": false,
+  "jobs_submitted_or_modified": false,
+  "files": [
+    {
+      "deployed_relative_path": "source/eric_generate_waveform.py",
+      "repository_path": "eric_generate_waveform.py",
+      "bytes": 14261,
+      "sha256": "ab9c96bbfa3de392cac9d34034aac56ed5cda45770f544f655d13d5df0a4eceb"
+    },
+    {
+      "deployed_relative_path": "source/eric_rjmcmc.py",
+      "repository_path": "eric_rjmcmc.py",
+      "bytes": 19971,
+      "sha256": "73b23ad25478c4f50acc9da13bab75c72ea87ee10b7baf1c0e399156342046db"
+    },
+    {
+      "deployed_relative_path": "source/eric_rjmcmc_tempered.py",
+      "repository_path": "eric_rjmcmc_tempered.py",
+      "bytes": 7524,
+      "sha256": "5087815ba2d550c88d3a4600cfe9512fc7827b01d4ae440f934c96310602fb46"
+    },
+    {
+      "deployed_relative_path": "source/eric_simulation_DWD.py",
+      "repository_path": "eric_simulation_DWD.py",
+      "bytes": 5455,
+      "sha256": "f902efc3b63c17772d59472e1c912c134ff9f38456304d8b1157a920ab6159f9"
+    },
+    {
+      "deployed_relative_path": "source/eric_snr.py",
+      "repository_path": "eric_snr.py",
+      "bytes": 17738,
+      "sha256": "7441c8ba7b7e0dc4680e5e4a14b6bb435be07684c68816f300911d46f1b0510e"
+    },
+    {
+      "deployed_relative_path": "source/eric_subtraction_10dwd.py",
+      "repository_path": "eric_subtraction_10dwd.py",
+      "bytes": 24229,
+      "sha256": "592cd80768496ee3036cbec2b88afb7a91a117c99e66fc15ca1d18ca0e473476"
+    },
+    {
+      "deployed_relative_path": "source/eric_subtraction_1block.py",
+      "repository_path": "eric_subtraction_1block.py",
+      "bytes": 26752,
+      "sha256": "e7a2ca169ba67aecd8b0f453dffa40476b42886e512d32148f6b55d066e9ce37"
+    },
+    {
+      "deployed_relative_path": "source/eric_subtraction_all.py",
+      "repository_path": "eric_subtraction_all.py",
+      "bytes": 28162,
+      "sha256": "d03fe8a35c40e249c083b57b55a3835492a74bffd5b7640efd3a4ca0fed01ad7"
+    },
+    {
+      "deployed_relative_path": "source/eric_tdi_gpu.py",
+      "repository_path": "eric_tdi_gpu.py",
+      "bytes": 642,
+      "sha256": "4f0c691dc0ae8e7b33ba75bf1f3c360207bb3d1677a0f66249c804f8694d235e"
+    },
+    {
+      "deployed_relative_path": "source/oneblock_experiment.py",
+      "repository_path": "oneblock_experiment.py",
+      "bytes": 20304,
+      "sha256": "35ad58aaf27c6821dd08d85a935ca48922bb629fc1ee39e7a77a552b541c74c5"
+    },
+    {
+      "deployed_relative_path": "source/plot_eric_doppler_corners.py",
+      "repository_path": "plot_eric_doppler_corners.py",
+      "bytes": 11516,
+      "sha256": "d1f20d2492156602af017e85dd4616a9eb8a7b6922e544459a33a6060e7a7d35"
+    },
+    {
+      "deployed_relative_path": "source/script/__init__.py",
+      "repository_path": "script/__init__.py",
+      "bytes": 93,
+      "sha256": "690435ac6e7f2002eeea1f418dfa8f9b153a8c6a97fd77711f2fa8f87b9ab74b"
+    },
+    {
+      "deployed_relative_path": "source/script/dwd_amplitude_refit.py",
+      "repository_path": "script/dwd_amplitude_refit.py",
+      "bytes": 3873,
+      "sha256": "a051b8a56b7d6722b8ff25ec2aa792448a4de6078095cf20a156e2ba88408573"
+    },
+    {
+      "deployed_relative_path": "source/script/dwd_bank_association.py",
+      "repository_path": "script/dwd_bank_association.py",
+      "bytes": 5013,
+      "sha256": "edb495424717a0580ddca21033218f189e0c7aae762dfb1b6672f2a003660235"
+    },
+    {
+      "deployed_relative_path": "source/script/dwd_blind_search.py",
+      "repository_path": "script/dwd_blind_search.py",
+      "bytes": 590,
+      "sha256": "55e07fd292cd862b9d197fc1e7e5014feeedf68ba83742c556e25a3c86f4cae3"
+    },
+    {
+      "deployed_relative_path": "source/script/dwd_chirp_policy.py",
+      "repository_path": "script/dwd_chirp_policy.py",
+      "bytes": 5920,
+      "sha256": "874c9efe040fa05c7ea82c12130bb0f4acf24e0860448736ad6807fe4797ec27"
+    },
+    {
+      "deployed_relative_path": "source/script/dwd_frequency_support.py",
+      "repository_path": "script/dwd_frequency_support.py",
+      "bytes": 1395,
+      "sha256": "8a341cdb4e5ce28eb8fc05dd0b185f90fbf197941f056488fd947ce4462015f1"
+    },
+    {
+      "deployed_relative_path": "source/script/dwd_population_gpu.py",
+      "repository_path": "script/dwd_population_gpu.py",
+      "bytes": 8545,
+      "sha256": "5fcae42160faf7a482b8ede3769d711b5312600cfd307a2a18714ec66bc0a00d"
+    },
+    {
+      "deployed_relative_path": "source/script/dwd_reference_cache.py",
+      "repository_path": "script/dwd_reference_cache.py",
+      "bytes": 7536,
+      "sha256": "82339ba541f911caed458af53c8953f7713054e612c6e1bea188991efaf18f62"
+    },
+    {
+      "deployed_relative_path": "source/script/dwd_run_status.py",
+      "repository_path": "script/dwd_run_status.py",
+      "bytes": 856,
+      "sha256": "edb59110f0c8e98b8016dcb1ed008f2668f081c931a33d93869fced46afdc6dd"
+    },
+    {
+      "deployed_relative_path": "source/script/dwd_worker_supervisor.py",
+      "repository_path": "script/dwd_worker_supervisor.py",
+      "bytes": 18175,
+      "sha256": "d8f7bb13fe07158aa16adf42c84b3045d28c79c889cdaa1aceafddb1ad910d43"
+    },
+    {
+      "deployed_relative_path": "source/script/eric_Fstats.py",
+      "repository_path": "script/eric_Fstats.py",
+      "bytes": 16814,
+      "sha256": "90d991e5915c2fb819fcfdc93aadc69f0a2c8ece7777e5142efec3df5b335837"
+    },
+    {
+      "deployed_relative_path": "source/script/eric_generate_waveform.py",
+      "repository_path": "script/eric_generate_waveform.py",
+      "bytes": 86204,
+      "sha256": "ece7b0872a49eae025a3821ea3d8dc9a46810ee9b7c5175310bb04986264fe20"
+    },
+    {
+      "deployed_relative_path": "source/script/eric_preprocess.py",
+      "repository_path": "script/eric_preprocess.py",
+      "bytes": 2880,
+      "sha256": "40840605db72ddd7f3699820af354f230acc35c30b6ff04e41700321858cf431"
+    },
+    {
+      "deployed_relative_path": "source/script/eric_rjmcmc.py",
+      "repository_path": "script/eric_rjmcmc.py",
+      "bytes": 16434,
+      "sha256": "a7dd3fb758502caabdedd464bea8c85a5024f048eaeb986eccea2e213d9ce3e2"
+    },
+    {
+      "deployed_relative_path": "source/script/lisa_daily_simulation.py",
+      "repository_path": "script/lisa_daily_simulation.py",
+      "bytes": 5779,
+      "sha256": "3a15c4f696da626a421c47704767f7083c7f66d5d7fe7292e6eb1624867bc761"
+    },
+    {
+      "deployed_relative_path": "source/script/monitor_dwd_run.py",
+      "repository_path": "script/monitor_dwd_run.py",
+      "bytes": 10590,
+      "sha256": "7d3240a1e309b653be259fd2bb415fd2a7e5194e97f4c1d0b6ed827cd062da61"
+    },
+    {
+      "deployed_relative_path": "source/script/native_lisa_filter.py",
+      "repository_path": "script/native_lisa_filter.py",
+      "bytes": 750,
+      "sha256": "1e148618a1c55cb1e11b941700efa092797d7b09cca57b7acef86ea72899cae1"
+    },
+    {
+      "deployed_relative_path": "source/script/oneblock_experiment.py",
+      "repository_path": "script/oneblock_experiment.py",
+      "bytes": 194,
+      "sha256": "69f9932eac87f5514ec3e07aa5cfe899558b598bb9b6adf9988c9f7d14d1d1e6"
+    },
+    {
+      "deployed_relative_path": "source/script/oneblock_godview.py",
+      "repository_path": "script/oneblock_godview.py",
+      "bytes": 4785,
+      "sha256": "6526bbb606f26f65c703342c85272c8fb3fb7df1a6f30bb03982cbafcce14ff8"
+    },
+    {
+      "deployed_relative_path": "source/script/oneblock_gpu_monitor.py",
+      "repository_path": "script/oneblock_gpu_monitor.py",
+      "bytes": 2205,
+      "sha256": "f78917c57e7284eb237deafaf972e61f30f9314e2cdd48f7a8e6f6df95d7eeff"
+    },
+    {
+      "deployed_relative_path": "source/script/oneblock_observation.py",
+      "repository_path": "script/oneblock_observation.py",
+      "bytes": 7662,
+      "sha256": "eb64741480d065cee4a36a71cc48918330adc031b2af8274c12eff88252f13bd"
+    },
+    {
+      "deployed_relative_path": "source/script/spectrum.py",
+      "repository_path": "script/spectrum.py",
+      "bytes": 35123,
+      "sha256": "ec929f98224a1bff77abe04048480a082d4f235f96d1fff31bc2aed823875766"
+    },
+    {
+      "deployed_relative_path": "source/script/td_full_horner.so",
+      "repository_path": "script/td_full_horner.so",
+      "bytes": 1408456,
+      "sha256": "bcca137c714ca5dcbce18cd9a73d2302e595748f90ed03dd93cdf7184d3d15ca"
+    },
+    {
+      "deployed_relative_path": "source/script/tool.py",
+      "repository_path": "script/tool.py",
+      "bytes": 8355,
+      "sha256": "00344e2aa258b7922ba94e398abd74a42f9251b7bd30db9c18902c07bdb3dcdd"
+    }
+  ]
+}

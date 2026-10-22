@@ -79,8 +79,6 @@ with h5py.File(snr_file, 'r') as hdf5:
     snr_duration = hdf5['settings/observation_duration_s'][()]
     snr_rate = hdf5['settings/detector_sampling_rate_hz'][()]
     snr_complete = hdf5['status/complete'][()]
-if not snr_complete or snr_duration != T_obs or snr_rate != fs:
-    raise ValueError('The SNR result must be complete and match T_obs and fs.')
 catalogue = np.empty(len(dgb) + len(igb), dtype=[('ID', 'i8')] + [
     (field, 'f8') for field in parameter_fields.values()
 ] + [('SNR_absolute', 'f8'), ('SNR_relative', 'f8')])
@@ -117,8 +115,6 @@ with single_cpu(),GPUUsageRecorder(telemetry_file) as monitor:
     print(f'Step 4/11  Read the saved observation from {observation_file}; simulation skipped',flush=True)
     with h5py.File(observation_file,'r') as saved:
         total_xyz_td = saved['observation/total_xyz_td'][:]
-    if total_xyz_td.shape != (3, N):
-        raise ValueError('The observation must contain three XYZ streams matching T_obs and fs.')
 
     # Continue Step 4: keep native Fourier coefficients and a wider covariance window.
     print('Step 4/11  Native raw Fourier coefficients; no smoothing or rebinning of data',flush=True)

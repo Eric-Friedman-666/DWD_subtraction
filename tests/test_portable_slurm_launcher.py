@@ -92,6 +92,18 @@ class PortableSlurmLauncherTests(unittest.TestCase):
             self.assertIn("GPU allocation", result.stderr)
             self.assertFalse(paths[2].exists())
 
+    def test_one_allocated_device_configures_only_one_gpu_of_slots(self):
+        with tempfile.TemporaryDirectory() as folder:
+            paths = self.fixture(Path(folder))
+            run = self.run_path(self.launch(paths, CUDA_VISIBLE_DEVICES="0",
+                                           DWD_BLOCK_WORKERS="16"))
+            launch = json.loads((run / "launch.json").read_text())
+            self.assertEqual(launch["gpu_devices"], ["0"])
+            self.assertEqual(launch["block_workers_per_gpu"], 16)
+            self.assertEqual(launch["configured_workers"], 16)
+            self.assertIn("#SBATCH --gres=gpu:a100:4", SCRIPT.read_text())
+            self.assertIn("#SBATCH --time=7-00:00:00", SCRIPT.read_text())
+
     def test_missing_input_fails_before_creating_run(self):
         with tempfile.TemporaryDirectory() as folder:
             paths = self.fixture(Path(folder))

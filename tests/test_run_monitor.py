@@ -18,7 +18,6 @@ class ReadOnlyRunMonitorTests(unittest.TestCase):
             write_run_status(path, controller_pid=123, worker_pid=456)
             self.assertEqual(json.loads(path.read_text())['controller_pid'], 123)
 
-    @unittest.skipUnless(Path('/proc').is_dir(), 'Linux /proc compute-host fixture required')
     def test_failure_clock_is_frozen_and_partial_round_not_finalized(self):
         with tempfile.TemporaryDirectory() as directory:
             run = Path(directory)
@@ -45,7 +44,6 @@ class ReadOnlyRunMonitorTests(unittest.TestCase):
         self.assertEqual([event['pipeline_pid'] for event in faults], [True, False])
         self.assertNotIn('OOM', faults[0]['text'])
 
-    @unittest.skipUnless(Path('/proc').is_dir(), 'Linux /proc compute-host fixture required')
     def test_spawning_jobs_are_counted_without_a_checkpoint_or_cuda_context(self):
         with tempfile.TemporaryDirectory() as directory:
             run, pid = Path(directory), os.getpid()
@@ -72,7 +70,6 @@ class ReadOnlyRunMonitorTests(unittest.TestCase):
             self.assertEqual(result['progress']['waiting_nonempty_blocks'], 1)
             self.assertEqual(result['progress']['unfinished_nonempty_directories'], [])
 
-    @unittest.skipUnless(Path('/proc').is_dir(), 'Linux /proc compute-host fixture required')
     def test_live_hdf5_is_never_opened_and_skips_fits_and_active_jobs_are_separate(self):
         with tempfile.TemporaryDirectory() as directory:
             run = Path(directory)
@@ -118,7 +115,6 @@ class ReadOnlyRunMonitorTests(unittest.TestCase):
             self.assertEqual(result['progress']['active_block_jobs'], 0)
             self.assertEqual(result['progress']['unfinished_nonempty_directories'], [2])
 
-    @unittest.skipUnless(Path('/proc').is_dir(), 'Linux /proc compute-host fixture required')
     def test_terminal_empty_round_has_no_fabricated_worker_percentage(self):
         with tempfile.TemporaryDirectory() as directory:
             run, pid = Path(directory), os.getpid()
@@ -137,7 +133,6 @@ class ReadOnlyRunMonitorTests(unittest.TestCase):
             self.assertIsNone(result['progress']['percent'])
             self.assertEqual(result['progress']['zero_work_skips'], 4990)
 
-    @unittest.skipUnless(Path('/proc').is_dir(), 'Linux /proc compute-host fixture required')
     def test_wrong_controller_cannot_publish_overall_percentage(self):
         with tempfile.TemporaryDirectory() as directory:
             run = Path(directory)
@@ -150,7 +145,6 @@ class ReadOnlyRunMonitorTests(unittest.TestCase):
             self.assertIn('unavailable', result['progress'])
             self.assertNotIn('percent', result['progress'])
 
-    @unittest.skipUnless(Path('/proc').is_dir(), 'Linux /proc compute-host fixture required')
     def test_initialization_has_no_fabricated_round_percentage(self):
         with tempfile.TemporaryDirectory() as directory:
             run = Path(directory)

@@ -6,10 +6,7 @@ import unittest
 import h5py
 import numpy as np
 import test_subtraction_all as fixtures
-from script.dwd_chirp_policy import (
-    bank_configuration_record, frequency_dependent_chirp_bounds,
-    frequency_dependent_padding,
-)
+from script.dwd_frequency_support import chirp_frequency_padding
 
 
 class ReleaseControllerTests(unittest.TestCase):
@@ -22,7 +19,7 @@ class ReleaseControllerTests(unittest.TestCase):
                 np.testing.assert_array_equal(saved['config/derivative_bounds'][:],
                     [[-4.e-12, -7.60863249122299e-23], [7.60863249122299e-23, 4.e-12]])
                 self.assertEqual(saved['config/chirp_prior'][()].decode(), 'signed_log_uniform')
-                self.assertEqual(saved['config/response_step_seconds'][()], 900.)
+                self.assertEqual(saved['config/response_step_seconds'][()], 3600.)
                 self.assertEqual(saved['config/maximum_sources'][()], 100)
                 self.assertEqual(saved['config/relative_snr_threshold'][()], 7.)
 
@@ -90,32 +87,9 @@ class ReleaseControllerTests(unittest.TestCase):
             # The actual controller rejects any mismatch at matching time.
             self.assertEqual(result['source_count'], 2)
             with h5py.File(output) as saved:
-                padding = saved['config/likelihood_frequency_padding_hz'][:]
+                padding = saved['config/likelihood_frequency_padding_hz'][()]
                 bounds = saved['config/derivative_bounds'][:]
-                bank_bounds = saved['config/derivative_bounds_by_block'][:]
-                blocks = saved['config/frequency_blocks_hz'][:]
-                duration = float(saved['config/duration'][()])
-                rate = float(saved['config/rate'][()])
-                width = float(saved['config/frequency_block_width'][()])
-                policy_hash = saved['config/chirp_bounds_policy_sha256'][()].decode()
-            expected_bounds = frequency_dependent_chirp_bounds(blocks, bounds)
-            expected_padding = frequency_dependent_padding(duration, width, blocks, expected_bounds)
-            np.testing.assert_array_equal(bank_bounds, expected_bounds)
-            np.testing.assert_array_equal(padding, expected_padding)
-            record = bank_configuration_record(duration, width, blocks, bounds,
-                expected_bounds, expected_padding)
-            atomic = json.loads((output.parent/'frequency_banks.settings.json').read_text())
-            self.assertEqual(policy_hash, record['policy_sha256'])
-            for name, value in record.items():
-                self.assertEqual(atomic[name], value)
-            frequency = np.fft.rfftfreq(round(duration*rate), d=1./rate)
-            for _, data, settings, worker_bounds, block in state['sampler']:
-                index, = np.flatnonzero(np.all(blocks == block, axis=1))
-                np.testing.assert_array_equal(worker_bounds, expected_bounds[index])
-                keep = ((frequency >= block[0]-padding[index])
-                    & (frequency <= block[1]+padding[index]) & (frequency > 0.))
-                np.testing.assert_array_equal(settings['physical_frequency'], frequency[keep])
-                self.assertEqual(data.shape[-1], np.count_nonzero(keep))
+            self.assertEqual(padding, chirp_frequency_padding(128000., .0001, .00045, bounds))
 
     def test_final_native_fft_and_residual_are_consistent(self):
         with tempfile.TemporaryDirectory() as folder:

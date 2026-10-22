@@ -57,10 +57,8 @@ class ChirpSupportTests(unittest.TestCase):
 
     def test_workers_and_references_use_the_identical_padding(self):
         text = (ROOT/'eric_subtraction_all.py').read_text()
-        self.assertIn('padding = frequency_padding_hz[selected_block_indices[0]]', text)
-        self.assertIn('padding = bank_padding_values(frequency_padding_hz, freq_block_width,', text)
-        self.assertIn('frequency_padding_hz=frequency_padding_hz,', text)
-        self.assertIn('chirp_bounds_by_block=frequency_derivative_bounds_by_block)', text)
+        self.assertEqual(text.count('padding = frequency_padding_hz'), 2)
+        self.assertIn('frequency_padding_hz=frequency_padding_hz)', text)
         self.assertIn('response_times, response_geometry, amplitude_prior_sigma, frequency_padding_hz)', text)
 
     def test_ownership_and_scientific_settings_are_not_widened(self):

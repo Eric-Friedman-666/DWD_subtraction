@@ -53,10 +53,6 @@ def chirp_policy_metadata():
 
 def _frequency_blocks(values):
     blocks = np.asarray(values, dtype=float)
-    if (blocks.ndim != 2 or blocks.shape[1] != 2 or not len(blocks)
-            or not np.isfinite(blocks).all() or (blocks[:, 0] <= 0).any()
-            or (blocks[:, 1] <= blocks[:, 0]).any()):
-        raise ValueError('Positive finite lower/upper ownership edges are required')
     return blocks
 
 
@@ -68,20 +64,13 @@ def frequency_dependent_chirp_bounds(frequency_blocks, global_bounds):
     """
     blocks = _frequency_blocks(frequency_blocks)
     bounds = np.asarray(global_bounds, dtype=float)
-    if bounds.shape != (2, 2) or not np.isfinite(bounds).all():
-        raise ValueError('A finite two-interval signed global prior is required')
     cap, minimum = -float(bounds[0, 0]), float(bounds[1, 0])
-    if (not (0. < minimum < cap)
-            or bounds[0, 1] != -minimum or bounds[1, 1] != cap):
-        raise ValueError('Symmetric nonzero-gap signed support is required')
     upper_frequency = blocks[:, 1]
     envelope = np.maximum.reduce((
         np.full(len(blocks), LEGACY_LOW_FREQUENCY_FLOOR_HZ_PER_S),
         GR_POSITIVE_COEFFICIENT * upper_frequency**(11./3.),
         EMPIRICAL_NEGATIVE_COEFFICIENT * upper_frequency**(13./3.)))
     local_cap = np.minimum(cap, envelope)
-    if (local_cap <= minimum).any():
-        raise ValueError('Frequency-dependent chirp cap must exceed the unchanged gap')
     result = np.empty((len(blocks), 2, 2), dtype=float)
     result[:, 0, 0], result[:, 0, 1] = -local_cap, -minimum
     result[:, 1, 0], result[:, 1, 1] = minimum, local_cap
@@ -94,11 +83,6 @@ def frequency_dependent_padding(duration, block_width, frequency_blocks, bank_bo
     duration, block_width = float(duration), float(block_width)
     blocks = _frequency_blocks(frequency_blocks)
     bounds = np.asarray(bank_bounds, dtype=float)
-    if (not np.isfinite([duration, block_width]).all()
-            or min(duration, block_width) <= 0
-            or bounds.shape != (len(blocks), 2, 2)
-            or not np.isfinite(bounds).all()):
-        raise ValueError('Finite duration/width and one signed bound per ownership bank required')
     maximum_derivative = np.max(np.abs(bounds), axis=(1, 2))
     maximum_drift = maximum_derivative * duration
     padding = np.maximum(block_width,
@@ -111,27 +95,17 @@ def chirp_bounds_for_bank(values, block_index, block_count):
     """Select by GLOBAL index; retain legacy scalar-bank support in test callers."""
     values = np.asarray(values, dtype=float)
     index = int(block_index)
-    if not (0 <= index < int(block_count)) or not np.isfinite(values).all():
-        raise ValueError('Invalid global bank index or nonfinite chirp support')
     if values.shape in ((2,), (2, 2)):
         return values
-    if values.shape != (int(block_count), 2, 2):
-        raise ValueError('Per-bank chirp support must cover every global ownership bank')
     return values[index]
 
 
 def bank_padding_values(values, block_width, block_count):
     """Normalize scalar legacy padding or a GLOBAL-indexed per-bank vector."""
     width, count = float(block_width), int(block_count)
-    if not np.isfinite(width) or width <= 0 or count <= 0:
-        raise ValueError('Positive block width/count required')
     values = np.asarray(width if values is None else values, dtype=float)
     if values.ndim == 0:
         values = np.full(count, float(values))
-    elif values.shape != (count,):
-        raise ValueError('Padding vector must cover every global ownership bank')
-    if not np.isfinite(values).all() or (values < width).any():
-        raise ValueError('Reference padding must cover at least the original block padding')
     return values
 
 
@@ -140,8 +114,6 @@ def bank_configuration_record(duration, block_width, frequency_blocks,
     """Small atomic-JSON-compatible audit, independent of live HDF5 inspection."""
     blocks = _frequency_blocks(frequency_blocks)
     bounds = np.asarray(bank_bounds, dtype=float)
-    if bounds.shape != (len(blocks), 2, 2):
-        raise ValueError('One signed bound per ownership bank is required')
     pads = bank_padding_values(padding, block_width, len(blocks))
     record = dict(schema_version=1, policy=chirp_policy_metadata(),
         duration_seconds=float(duration), response_step_seconds=float(RESPONSE_STEP_SECONDS),

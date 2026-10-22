@@ -106,8 +106,6 @@ def inspect_run(run, *, query_gpu=True, query_kernel=True):
     if nonempty is not None and total is not None and alive:
         nonempty = set(nonempty)
         empty = status['empty_input_block_count']
-        if empty + len(nonempty) != total:
-            raise ValueError('Status input-bank accounting is inconsistent')
         completed = sum(v['result'] for i, v in files.items() if i in nonempty)
         fits = sum(v['result'] and v['backend'] for i, v in files.items() if i in nonempty)
         unfinished = [i for i, v in files.items() if i in nonempty and not v['result']]

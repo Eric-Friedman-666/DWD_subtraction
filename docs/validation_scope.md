@@ -1,16 +1,18 @@
 # Validation scope and limitations
 
-This publication updates the source snapshot and portable launch packaging only. It does not change any deployed server/OzSTAR source, job, environment, guard or output. Publishing or running CPU fixture tests is not a new scientific test pass.
+The 22 October 2026 publication synchronizes the active OzSTAR source and portable launch packaging. It does not change deployed source, jobs, environments, guards or outputs. No scientific controller, sampler or GPU/native test is executed for publication. The current source is not the frozen 20 October release.
 
 ## What is checked
 
-- The scientific controller and helper source are synchronized from the frozen frequency-dependent 900-second multi-GPU snapshot.
-- Signed-log prior support, per-bank chirp bounds/padding, fixed SNR filtering, matching/winner refit, atomic status and worker supervision have focused CPU/mock/temporary-fixture regressions.
+- All scientific Python controller/helper files are synchronized byte-for-byte from the active deployment's `source/` tree, mapped to the public repository root. File hashes and the layout mapping are in [source_snapshot.json](source_snapshot.json).
+- Python source is parsed without imports or execution. Shell syntax and launcher-only temporary-controller fixtures are checked, including a single allocated device and fresh run identity. No scientific tests are run.
 - The reusable Slurm template is syntax checked and its preparation/exec logic is exercised only against a fake temporary controller. Those packaging fixtures neither submit Slurm work nor import scientific/GPU runtimes.
 - No live scientific HDF5, pickle, reference cache or sampler chain is used for publication checks.
 - Data, credentials, local paths and machine-specific deployment receipts are not published.
 
-See [publication_checks.json](publication_checks.json) for the actual checks performed on this update: 124 passed and 11 skipped across 17 selected CPU/mock modules on macOS, plus Python AST parsing and shell syntax checks. This is not a full-suite result. Six monitor fixtures require Linux /proc, three require installed Eryn, and two require optional historical-reference sources. These skips are not passes. Some temporary-fixture teardowns emitted macOS multiprocessing resource-tracker duplicate-cleanup warnings after unittest success; no clean Linux worker-lifecycle claim follows. The monitor implementation and scientific controller were not changed to hide those warnings or platform limitations.
+See [publication_checks.json](publication_checks.json) for the checks actually performed on this update. The previous 124-pass/11-skip report is preserved separately in [publication_checks_20261020.json](publication_checks_20261020.json); it is not a test result for the new source. Retained scientific and historical tests have not been requalified and may require adaptation to the current source/schema.
+
+This synchronization preserves current behavior, including removal of several defensive input, cache-shape, amplitude-refit solver/KKT/objective and worker-argument checks compared with the previous publication. It does not silently restore those checks or treat their removal as a validated improvement. The supervisor now uses per-attempt status filenames and exits on unrecoverable errors. No fresh numerical accuracy, retry exhaustion, worker cleanup or failure-path qualification is claimed.
 
 ## Preserved scientific limitations
 
@@ -26,4 +28,4 @@ The final amplitude refit uses observed data, nonnegative scales and fixed winne
 
 The public Slurm template uses a unique output directory per submission, a new source snapshot and input symlinks. It does not inherit residuals, reference caches or partial chains, and it never submits replacement jobs. It is separate from historical one-use deployment wrappers. Do not delete a consumed guard or edit a historical receipt to make an old deployment look like a new run.
 
-A submitted job retains its stored batch script. Deploying or pulling this GitHub update does not change a pending/running job; any new submission or cancellation is a separate user action.
+A submitted job retains its stored batch script, but this launcher copies mutable source only when it actually starts. A later change to that deployment source could therefore change a queued job's source snapshot. This GitHub publication makes no such deployment changes. New submissions, cancellations and deployments are separate user actions.

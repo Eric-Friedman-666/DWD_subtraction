@@ -7,8 +7,6 @@ from script.eric_Fstats import physical_amplitude_coordinates, reconstruct_wavef
 
 
 def too_many_ghosts(ghost_count,source_count,threshold):
-    if not 0 <= ghost_count <= source_count or not 0 <= threshold <= 1:
-        raise ValueError('Invalid ghost count or fraction threshold.')
     return source_count > 0 and ghost_count/source_count > threshold
 
 

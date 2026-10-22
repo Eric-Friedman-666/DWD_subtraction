@@ -1,254 +1,39 @@
 {
-  "publication_date": "2026-10-20",
-  "scope": "Selected local CPU/mock/generated temporary-fixture checks only; not the full test suite or native/GPU qualification.",
-  "platform": {
-    "system": "Darwin",
-    "machine": "arm64",
-    "python": "3.12.7",
-    "numpy": "1.26.4",
-    "scipy": "1.13.1",
-    "h5py": "3.11.0",
-    "eryn": "not installed"
+  "publication_date": "2026-10-22",
+  "scope": "Static source and isolated launch packaging only; not scientific validation.",
+  "controller_sha256": "d03fe8a35c40e249c083b57b55a3835492a74bffd5b7640efd3a4ca0fed01ad7",
+  "source_copy_check": {
+    "passed": true,
+    "files": 35,
+    "python_files": 34,
+    "remote_source_reverified_before_publication": true
   },
-  "environment": {
-    "CUDA_VISIBLE_DEVICES": "-1",
-    "DWD_GPU_DEVICES": "-1",
-    "JAX_PLATFORMS": "cpu",
-    "native_gpu_library_loaded": false,
-    "live_scientific_inputs_used": false,
-    "remote_jobs_accessed_or_modified": false
+  "python_ast": {
+    "passed": true,
+    "files": 76,
+    "imports_executed": false
   },
-  "summary": {
-    "selected_modules": 17,
-    "tests": 135,
-    "passed": 124,
-    "skipped": 11,
-    "failures": 0,
-    "errors": 0,
-    "all_selected_cases_successful": true,
-    "python_files_ast_parsed": 76,
-    "slurm_template_bash_syntax": "passed",
-    "git_diff_whitespace_check": "passed"
+  "shell_syntax": {
+    "passed": true,
+    "command": "bash -n eric_subtraction_all.sh"
   },
-  "results": [
-    {
-      "module": "test_signed_prior_math",
-      "tests": 8,
-      "passed": 8,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_chirp_frequency_support",
-      "tests": 11,
-      "passed": 11,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_rjmcmc_configuration",
-      "tests": 6,
-      "passed": 6,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_amplitude_only_refit",
-      "tests": 21,
-      "passed": 21,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_same_block_association",
-      "tests": 4,
-      "passed": 4,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_identification_gate",
-      "tests": 5,
-      "passed": 5,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_empty_input_blocks",
-      "tests": 6,
-      "passed": 5,
-      "skipped": [
-        {
-          "test": "test_empty_input_blocks.EmptyInputBlockTests.test_scientific_outputs_match_pre_skip_controller",
-          "reason": "Set DWD_EMPTY_SKIP_REFERENCE to the saved pre-change source directory"
-        }
-      ],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_reference_waveform_cache",
-      "tests": 21,
-      "passed": 20,
-      "skipped": [
-        {
-          "test": "test_reference_waveform_cache.CachedControllerTests.test_full_scientific_output_matches_uncached_same_block_controller",
-          "reason": "Server runner supplies the preserved uncached SNR>7 controller"
-        }
-      ],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_filtered_worker",
-      "tests": 1,
-      "passed": 1,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_release_controller",
-      "tests": 9,
-      "passed": 9,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_run_monitor",
-      "tests": 8,
-      "passed": 2,
-      "skipped": [
-        {
-          "test": "test_run_monitor.ReadOnlyRunMonitorTests.test_failure_clock_is_frozen_and_partial_round_not_finalized",
-          "reason": "Linux /proc compute-host fixture required"
-        },
-        {
-          "test": "test_run_monitor.ReadOnlyRunMonitorTests.test_initialization_has_no_fabricated_round_percentage",
-          "reason": "Linux /proc compute-host fixture required"
-        },
-        {
-          "test": "test_run_monitor.ReadOnlyRunMonitorTests.test_live_hdf5_is_never_opened_and_skips_fits_and_active_jobs_are_separate",
-          "reason": "Linux /proc compute-host fixture required"
-        },
-        {
-          "test": "test_run_monitor.ReadOnlyRunMonitorTests.test_spawning_jobs_are_counted_without_a_checkpoint_or_cuda_context",
-          "reason": "Linux /proc compute-host fixture required"
-        },
-        {
-          "test": "test_run_monitor.ReadOnlyRunMonitorTests.test_terminal_empty_round_has_no_fabricated_worker_percentage",
-          "reason": "Linux /proc compute-host fixture required"
-        },
-        {
-          "test": "test_run_monitor.ReadOnlyRunMonitorTests.test_wrong_controller_cannot_publish_overall_percentage",
-          "reason": "Linux /proc compute-host fixture required"
-        }
-      ],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_round_reporting",
-      "tests": 3,
-      "passed": 3,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_shared_worker_memory",
-      "tests": 1,
-      "passed": 1,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_rjmcmc_birthdeath",
-      "tests": 3,
-      "passed": 0,
-      "skipped": [
-        {
-          "test": "test_rjmcmc_birthdeath.BirthDeathTests.test_actual_eryn_birth_and_death_call_descriptive_methods",
-          "reason": "Installed Eryn is required; run in lisa_pipeline on server."
-        },
-        {
-          "test": "test_rjmcmc_birthdeath.BirthDeathTests.test_actual_eryn_sampler_accepts_births_and_deaths",
-          "reason": "Installed Eryn is required; run in lisa_pipeline on server."
-        },
-        {
-          "test": "test_rjmcmc_birthdeath.BirthDeathTests.test_nonempty_bank_birth_from_zero_model_and_zero_size_batches",
-          "reason": "Installed Eryn is required; run in lisa_pipeline on server."
-        }
-      ],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_frequency_dependent_chirp",
-      "tests": 17,
-      "passed": 17,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_gpu_assignment",
-      "tests": 5,
-      "passed": 5,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    },
-    {
-      "module": "test_portable_slurm_launcher",
-      "tests": 6,
-      "passed": 6,
-      "skipped": [],
-      "failure_ids": [],
-      "error_ids": [],
-      "exit_code": 0
-    }
-  ],
-  "reproduction": {
-    "command_template": "python3 -m unittest discover -s tests -p '<module>.py' -v",
-    "notes": [
-      "Run each selected module in a fresh interpreter from the repository root with the listed CPU-only environment.",
-      "Leave DWD_EMPTY_SKIP_REFERENCE and DWD_REFERENCE_CACHE_BASELINE unset unless separately preserved compatible baselines are available.",
-      "The portable Slurm launcher fixtures replace srun with a temporary stub and execute a fake controller; they never submit jobs."
-    ]
+  "launcher_fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "skipped": 0,
+    "command": "python3 -B -m unittest discover -s tests -p 'test_portable_slurm_launcher.py' -v",
+    "scope": "Fake temporary controller, input links, fresh runs, PID/path metadata, invalid inputs/allocation and one-device configured slots. No Slurm submission or scientific modules."
   },
-  "warnings": [
-    "Several macOS multiprocessing temporary-fixture teardowns emitted resource_tracker duplicate-cleanup KeyError and missing-semaphore warnings after unittest success. These are recorded limitations, not claimed clean Linux worker-lifecycle validation.",
-    "Six Linux /proc monitor fixtures initially errored on macOS. Explicit platform skip decorators now leave them unchanged on Linux and unexecuted on macOS; monitor implementation was not altered.",
-    "Three actual-Eryn tests and two optional historical-reference comparisons were skipped, not passed.",
-    "Retained historical-schema and allocated-resource smoke tests outside these selected modules were not run."
-  ],
-  "scientific_qualification_claimed": false,
-  "scientific_controller_sha256": "e125f9555c95255ab214cdb993bac548ce908e4d57bbcfbba1d64d27d9dbd8b1",
-  "chirp_policy_sha256": "34afa82058570b71b7ac68706709a28c8d18a2115c2a401da505941490d759af",
-  "unchanged_native_helper_sha256": "bcca137c714ca5dcbce18cd9a73d2302e595748f90ed03dd93cdf7184d3d15ca"
+  "diff_whitespace": {
+    "passed": true
+  },
+  "scientific_suite_run": false,
+  "full_suite_run": false,
+  "gpu_tests_run": false,
+  "live_hdf5_pickle_cache_or_chain_payloads_opened": false,
+  "native_gpu_accuracy_qualification": false,
+  "convergence_or_completeness_claimed": false,
+  "prior_check_report": "publication_checks_20261020.json (historical; does not validate this source)",
+  "excluded": "Datasets, environments, logs, run outputs, checkpoints, caches, generated-output notebooks, credentials and private deployment receipts.",
+  "remote_files_or_jobs_modified": false
 }

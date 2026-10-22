@@ -21,10 +21,6 @@ def iterative_recovery(output,template_file,duration,rate,center,frequency_range
                        result_file=None,provenance=None):
     from script.eric_rjmcmc import run_eryn_rjmcmc
     from script.tool import single_cpu
-    if not np.isfinite(f_threshold) or f_threshold<=0:
-        raise ValueError('The screening F threshold must be finite and positive.')
-    if new_sources_only and not exclude_recovered_templates:
-        raise ValueError('New-source-only rounds require exclusion of already-matched templates.')
     output = Path(output)
     single_file_output = result_file is not None
     result_file = Path(result_file) if single_file_output else output/'experiment.h5'
@@ -32,7 +28,6 @@ def iterative_recovery(output,template_file,duration,rate,center,frequency_range
         started = time.perf_counter()
         print('3/6  Native raw Fourier coefficients; no smoothing or rebinning of data',flush=True)
         with h5py.File(output/'observation.h5') as saved:
-            assert saved.attrs['complete']
             total = saved['total_xyz_td'][:]
         full_fft = np.fft.rfft(total,axis=-1)
         count = total.shape[-1]
@@ -51,8 +46,6 @@ def iterative_recovery(output,template_file,duration,rate,center,frequency_range
         if termination_policy in ('candidates_or_ghosts','candidates_ghosts_or_no_new_recovered'):
             from script.oneblock_godview import PopulationGodView,too_many_ghosts,new_recovered_dwd_ids
             godview = PopulationGodView(output,builder,core_indices,duration,rate)
-        elif termination_policy!='stability':
-            raise ValueError('Unknown stopping policy.')
         with h5py.File(template_file) as saved:
             bank_ids = saved['templates/dwd_id'][:]
             bank_doppler = np.column_stack([saved['templates/'+key][:] for key in ('f','df','longitude','latitude')])
@@ -98,21 +91,6 @@ def iterative_recovery(output,template_file,duration,rate,center,frequency_range
                     godview_stopping=godview is not None)
                 saved.attrs['source_inference_scope'] = ('Additional DWDs conditional on fixed previously accepted waveforms.'
                     if new_sources_only else 'Joint refinement of the complete catalogue.')
-        with h5py.File(result_file) as saved:
-            saved_threshold = float(saved['config/f_threshold'][()]) if 'config/f_threshold' in saved else 64.
-            if saved_threshold!=f_threshold:
-                raise ValueError('A different threshold requires a separate experiment directory.')
-            encoded_policy = saved['config'].attrs.get('termination_policy')
-            saved_policy = (json.loads(encoded_policy) if encoded_policy is not None else
-                            ('candidates_or_ghosts' if saved.attrs.get('godview_stopping',False) else 'stability'))
-            if saved_policy!=termination_policy:
-                raise ValueError('A different stopping policy requires a separate experiment directory.')
-            saved_exclusion = bool(saved['config/exclude_recovered_templates'][()]) if 'config/exclude_recovered_templates' in saved else False
-            if saved_exclusion!=exclude_recovered_templates:
-                raise ValueError('A different template-exclusion policy requires a separate experiment directory.')
-            saved_new_only = bool(saved['config/new_sources_only'][()]) if 'config/new_sources_only' in saved else False
-            if saved_new_only!=new_sources_only:
-                raise ValueError('A different source-refinement policy requires a separate experiment directory.')
         stopped = False
         stopping_reason = 'maximum_rounds_reached'
         for iteration in range(1,maximum_rounds+1):
@@ -120,8 +98,6 @@ def iterative_recovery(output,template_file,duration,rate,center,frequency_range
             with h5py.File(result_file) as saved:
                 if label in saved['rounds']:
                     prior = saved['rounds/'+label]
-                    if not prior.attrs.get('complete',False):
-                        raise RuntimeError('Partial saved round retained; resume its checkpoint explicitly.')
                     if prior.attrs.get('accepted_for_subtraction',True):
                         previous_wave = prior['recovery/signal_xyz_fd_wide'][:]
                         previous_doppler = prior['recovery/doppler'][:]
@@ -171,8 +147,6 @@ def iterative_recovery(output,template_file,duration,rate,center,frequency_range
                 print(f'No new F >= {f_threshold:g} candidates: retain the last accepted RJMCMC catalogue; no empty follow-up round.',flush=True)
                 break
             initial = (bank_doppler[selected] if new_sources_only else np.concatenate((previous_doppler,bank_doppler[selected])))
-            if len(initial)>49:
-                raise RuntimeError('Initial catalogue exceeds the documented N<=49 prior; no candidates were silently pruned.')
             if new_sources_only:
                 print(f'Round {iteration}: {len(selected)} new candidates active; {len(previous_doppler)} earlier components frozen and subtracted; N counts new sources only',flush=True)
             else:
@@ -183,7 +157,6 @@ def iterative_recovery(output,template_file,duration,rate,center,frequency_range
                 initial,frequency_range,derivative_bounds,center,duration,rate,
                 output/f'round_{label}_checkpoints',chain_count=1,iterations=iterations,burn_in=burn_in,
                 maximum_sources=49,response_times=times,response_geometry=geometry,physical_frequency=frequency)
-            assert posterior['fixed_covariance_sha256']==digest
             coefficients = posterior['fit_result']['coefficients']
             source_wide = reconstruct_waveform(coefficients,builder.build(posterior['doppler']))
             source_core = source_wide[:,:,core_indices]

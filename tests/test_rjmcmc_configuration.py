@@ -69,16 +69,10 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_default_bounds_use_the_validated_signed_log_magnitude_support(self):
         pipeline = ast.parse((ROOT / 'eric_subtraction_all.py').read_text())
-        guards = [node for node in pipeline.body if isinstance(node, ast.If)
-                  and ast.unparse(node.test) == "__name__ == '__main__'"]
-        nodes = [node for guard in guards for node in guard.body if isinstance(node, ast.Assign)
-                 and any(isinstance(t, ast.Name) and t.id in ('frequency_range', 'frequency_derivative_bounds') for t in node.targets)]
-        self.assertEqual(len(nodes), 2)
-        self.assertEqual({target.id for node in nodes for target in node.targets if isinstance(target, ast.Name)},
-                         {'frequency_range', 'frequency_derivative_bounds'})
+        nodes = [node for node in ast.walk(pipeline) if isinstance(node, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id in ('f_derivative_pn', 'frequency_derivative_bounds') for t in node.targets)]
         scope = dict(np=np)
         exec(compile(ast.Module(body=nodes, type_ignores=[]), 'bounds', 'exec'), scope)
-        self.assertEqual(scope['frequency_range'], (1.e-4, .05))
         np.testing.assert_allclose(scope['frequency_derivative_bounds'],
                                    [[-4.e-12, -7.60863249122299e-23],
                                     [7.60863249122299e-23, 4.e-12]], rtol=1.e-15, atol=0.)

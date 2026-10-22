@@ -53,8 +53,6 @@ def write_checkpoint(group, snapshot):
             dataset.attrs.update(attributes)
 
 
-
-
 def pack_observation(directory, output_file, *, overwrite=False, time_domain_only=False):
     """Publish a portable input, optionally sharing the saved TD observation."""
     directory = Path(directory).expanduser().resolve()

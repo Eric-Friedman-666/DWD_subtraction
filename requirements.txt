@@ -1,4 +1,5 @@
-# Snapshot of the working Linux/CUDA lisa_pipeline environment (Python 3.12.7).
+# Historical working Linux/CUDA lisa_pipeline environment snapshot (Python 3.12.7).
+# Retained for context, not a fresh inventory/lock of the October 22 OzSTAR run.
 # See README.md for the native-LISA API and prebuilt GPU-helper requirements.
 numpy==2.3.5
 scipy==1.18.0

@@ -60,13 +60,10 @@ def load_best_doppler_samples(result_file):
         recovered_index = comparison['recovered_index'][:]
         truth = np.column_stack([comparison['injected_parameters/'+key][:]
                                  for key in ('log10_f', 'log10_df', 'longitude', 'latitude')])
-    assert modal == len(point)
     mask = counts == modal
     samples = q[mask, :modal].copy()
-    assert len(samples) > 10 and np.isfinite(samples).all()
     scale = center*duration*np.log(10.)
     samples[:, :, 0] = np.log10(center)+samples[:, :, 0]/scale
-    assert np.max(np.abs(samples[:, :, 3])) <= 1.+1.e-12
     samples[:, :, 3] = np.arcsin(np.clip(samples[:, :, 3], -1., 1.))
 
     # Relabel against the recovered catalogue, not against injection truth.
@@ -82,7 +79,6 @@ def load_best_doppler_samples(result_file):
     samples[:, :, 2] = point[None, :, 2]+(samples[:, :, 2]-point[None, :, 2]+np.pi)%(2*np.pi)-np.pi
     production_indices = np.flatnonzero(mask)
     cycles = burn+1+np.arange(len(counts))*thin
-    assert cycles[-1] <= iterations
 
     # ESS uses one uninterrupted visit, never concatenates different-N gaps.
     edges = np.diff(np.r_[False, mask, False].astype(int))

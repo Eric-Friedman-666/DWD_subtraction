@@ -6,20 +6,26 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --gres=gpu:a100:4
 #SBATCH --mem=256G
-#SBATCH --time=2-00:00:00
+#SBATCH --time=7-00:00:00
 #SBATCH --no-requeue
 #SBATCH --output=dwd-subtraction-%j.log
 
 # Submit from the checkout: sbatch --account=YOUR_PROJECT eric_subtraction_all.sh
 # This reusable template does not reference historical deployment guards.
 set -euo pipefail
+umask 027
 : "${SLURM_JOB_ID:?Submit this script with sbatch; do not run it on a login node.}"
 source_dir="${DWD_SOURCE_DIR:-${SLURM_SUBMIT_DIR:?}}"
 data_dir="${DWD_DATA_DIR:-${source_dir}/data}"
 runs_dir="${DWD_RUNS_ROOT:-${source_dir}/output/runs}"
 python_executable="${DWD_PYTHON:-python3}"
+export TMPDIR="${source_dir}/output/tmp" XDG_CACHE_HOME="${source_dir}/output/cache"
+export CUDA_CACHE_PATH="${XDG_CACHE_HOME}/cuda" MPLCONFIGDIR="${XDG_CACHE_HOME}/matplotlib"
+mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$CUDA_CACHE_PATH" "$MPLCONFIGDIR"
 export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
+unset XLA_PYTHON_CLIENT_MEM_FRACTION
+export JAX_PLATFORMS=cuda JAX_PLATFORM_NAME=gpu
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export DWD_BLOCK_WORKERS="${DWD_BLOCK_WORKERS:-16}"
 export DWD_WORKER_PROGRESS_TIMEOUT="${DWD_WORKER_PROGRESS_TIMEOUT:-600}"

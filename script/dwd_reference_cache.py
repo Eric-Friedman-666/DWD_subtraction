@@ -17,8 +17,6 @@ from script.dwd_chirp_policy import bank_padding_values
 def _content_signature(value):
     """Hash values, not pickle memoization, NumPy scalar wrappers or strides."""
     if isinstance(value, np.ndarray):
-        if value.dtype.hasobject:
-            raise TypeError('Object arrays are not reference-cache inputs')
         return dict(array_dtype=value.dtype.str, shape=list(value.shape),
             sha256=hashlib.sha256(value.tobytes(order='C')).hexdigest())
     if isinstance(value, np.generic):
@@ -31,7 +29,6 @@ def _content_signature(value):
         return dict(bytes_sha256=hashlib.sha256(value).hexdigest())
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
-    raise TypeError(f'Unsupported reference-cache input: {type(value)}')
 
 
 def reference_cache_key(selected_blocks, template_tables, frequency_blocks,
@@ -61,16 +58,15 @@ def reference_cache_key(selected_blocks, template_tables, frequency_blocks,
 
 @contextmanager
 def _open_cache(path, mode, timeout=30.):
-    """Wait for a transient HDF5 lock; never disable locking or hide other errors."""
     deadline = monotonic() + timeout
-    while True:
+    saved = None
+    while saved is None and monotonic() < deadline:
         try:
             saved = h5py.File(path, mode)
-            break
         except BlockingIOError:
-            if monotonic() >= deadline:
-                raise
             sleep(.1)
+    if saved is None:
+        saved = h5py.File(path, mode)
     try:
         yield saved
     finally:
@@ -89,10 +85,6 @@ def precompute_reference_waveforms(cache_file, selected_blocks, template_tables,
         frequency_padding_hz=frequency_padding_hz, chirp_bounds_by_block=chirp_bounds_by_block)
     padding_by_block = bank_padding_values(frequency_padding_hz,
         block_width, len(frequency_blocks))
-    if chirp_bounds_by_block is not None:
-        bounds = np.asarray(chirp_bounds_by_block, dtype=float)
-        if bounds.shape != (len(frequency_blocks), 2, 2) or not np.isfinite(bounds).all():
-            raise ValueError('Reference-cache chirp support must cover every global ownership bank')
     cache, loaded, generated = {}, 0, 0
     progress = dict(phase='reference_cache', complete=False, cache_key=cache_key,
         nonempty_block_total=sum(bool(len(table)) for table in template_tables),
@@ -115,11 +107,6 @@ def precompute_reference_waveforms(cache_file, selected_blocks, template_tables,
                 group = saved[group_name]
                 values = {name: group[name][:] for name in ('dwd_id', 'retained_bins', 'waveforms')}
         if values is not None:
-            if (not np.array_equal(values['dwd_id'], ids)
-                    or not np.array_equal(values['retained_bins'], retained_bins)
-                    or values['waveforms'].shape != (len(ids), 3, len(retained_bins))
-                    or values['waveforms'].dtype != np.dtype(complex)):
-                raise ValueError(f'Invalid reference cache: block {block_index}')
             loaded += 1
         else:
             physical_frequency = frequency[retained_bins]

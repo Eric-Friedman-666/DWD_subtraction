@@ -47,7 +47,7 @@ class RoundReportingTests(unittest.TestCase):
             save_tree(group, values)
             if group.name.startswith('/rounds/'):
                 writes.append(group.name)
-                events.append(('saved', group.name))
+                events.append('saved')
         def clock():
             events.append('clock')
             return float(len(events))
@@ -55,11 +55,8 @@ class RoundReportingTests(unittest.TestCase):
              patch.object(fixtures, 'save_tree', side_effect=observe_write), \
              patch('time.perf_counter', side_effect=clock):
             self.run_case(directory, empty_fit=True)
-        # The mandatory refit audit is a nested dictionary, saved recursively
-        # before its enclosing round. Neither save may occur after the timer.
-        self.assertEqual(writes, ['/rounds/01/amplitude_refits', '/rounds/01'])
-        self.assertEqual(events, ['clock', ('saved', '/rounds/01/amplitude_refits'),
-                                  ('saved', '/rounds/01'), 'clock'])
+        self.assertEqual(writes, ['/rounds/01'])
+        self.assertEqual(events, ['clock', 'saved', 'clock'])
 
 
 if __name__ == '__main__':

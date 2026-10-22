@@ -41,6 +41,8 @@ __pycache__/
 .ipynb_checkpoints/
 .venv/
 venv/
+envs/
+*.egg-info/
 .vscode/
 .DS_Store
 ._*

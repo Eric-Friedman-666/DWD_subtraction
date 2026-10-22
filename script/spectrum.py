@@ -488,11 +488,6 @@ class DetectorFunction:
         held across its annual sidebands.
         """
         frequency_response = np.asarray(frequency_response)
-        if frequency_response.ndim != 3:
-            raise ValueError(
-                "frequency_response must have shape "
-                "(channel, source, Fourier bin)"
-            )
         inverse_covariance, signal_filter_amplitude = (
             self.inverse_noise_covariance(
                 f=f,

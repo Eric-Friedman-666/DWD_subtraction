@@ -13,6 +13,7 @@ import json
 import os
 import pickle
 import shutil
+import sys
 import time
 import traceback
 from uuid import uuid4
@@ -20,10 +21,6 @@ from uuid import uuid4
 from script.dwd_run_status import write_run_status
 
 _worker_context = None
-
-
-class BlockWorkerError(RuntimeError):
-    """A block exhausted its recovery budget; the round must not be committed."""
 
 
 def worker_progress(phase, *, force=False, **fields):
@@ -51,10 +48,10 @@ def _store_payload(value):
     memory = SharedMemory(create=True, size=len(encoded))
     try:
         memory.buf[:len(encoded)] = encoded
-    except BaseException:
+    except BaseException as error:
         memory.close()
         memory.unlink()
-        raise
+        sys.exit(str(error) or 1)
     return memory, len(encoded)
 
 
@@ -76,7 +73,7 @@ def _release_payload(description):
 def _run_one(job_payload, initialization_payload, progress):
     global _worker_context
     # The environment is also inherited at Process.start(), so even imports in
-    # the spawned __main__ see this device. Reassert before payload unpickling.
+    # the spawned __main__ see this device. Set it before payload unpickling.
     if progress.get('gpu_device') is not None:
         os.environ['CUDA_VISIBLE_DEVICES'] = progress['gpu_device']
         os.environ['DWD_ASSIGNED_GPU'] = progress['gpu_device']
@@ -97,7 +94,7 @@ def _run_one(job_payload, initialization_payload, progress):
     except BaseException as error:
         worker_progress('failed', force=True, error=repr(error),
             traceback=traceback.format_exc()[-8000:])
-        raise
+        sys.exit(str(error) or 1)
 
 
 def _stop(processes, grace):
@@ -118,15 +115,14 @@ def _stop(processes, grace):
     for process in processes:
         process.join(timeout=0)
     if any(process.is_alive() for process in processes):
-        raise BlockWorkerError('An owned worker could not be reaped; refusing to change the shared round snapshot')
+        sys.exit('An owned worker could not be reaped; refusing to change the shared round snapshot')
 
 
-def _read_progress(path, token, pid):
+def _read_progress(path):
     try:
-        fields = json.loads(path.read_text())
+        return json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
-    return fields if fields.get('attempt_token') == token and fields.get('worker_pid') == pid else {}
 
 
 def _archive_attempt(work, label, index, attempt, token, progress):
@@ -153,26 +149,15 @@ def run_block_jobs(function, jobs, *, max_workers, initializer=None, initargs=()
     through real sampler progress. A repeatedly failing block fails the round;
     it is never converted into an empty result or silently skipped.
     """
-    if max_workers < 1 or progress_timeout <= 0 or max_attempts < 1 or poll_interval <= 0 or stop_grace <= 0:
-        raise ValueError('Worker limits, timeouts and attempt counts must be positive')
-    if (gpu_devices is None) != (workers_per_gpu is None):
-        raise ValueError('GPU devices and workers_per_gpu must be provided together')
     if worker_gpu_memory_fraction is not None:
-        if gpu_devices is None or not 0. < float(worker_gpu_memory_fraction) <= 1.:
-            raise ValueError('Worker GPU memory fraction requires GPU admission and must be in (0, 1]')
         worker_gpu_memory_fraction = float(worker_gpu_memory_fraction)
     if gpu_devices is not None:
         gpu_devices = tuple(str(device).strip() for device in gpu_devices)
-        if (not gpu_devices or any(not device or ',' in device for device in gpu_devices)
-                or len(set(gpu_devices)) != len(gpu_devices)
-                or not isinstance(workers_per_gpu, int) or workers_per_gpu < 1
-                or max_workers > workers_per_gpu * len(gpu_devices)):
-            raise ValueError('Unique GPU devices, positive integer capacity and sufficient GPU slots required')
     work, label = Path(work), str(label)
     progress_directory = work / 'worker_status'
     progress_directory.mkdir(parents=True, exist_ok=True)
     context = get_context('spawn')
-    incoming, retries, active, seen = iter(jobs), deque(), {}, set()
+    incoming, retries, active = iter(jobs), deque(), {}
     exhausted = False
     summary = dict(configured_slots=int(max_workers), spawned_processes=0,
         completed_blocks=0, retries=0, forced_cleanup_after_commit=0, maximum_active=0)
@@ -231,16 +216,13 @@ def run_block_jobs(function, jobs, *, max_workers, initializer=None, initargs=()
                         break
                     index, table = job
                     index, attempt = int(index), 1
-                    if index in seen:
-                        raise ValueError(f'Duplicate block job: {index}')
-                    seen.add(index)
                 result = work / f'round_{label}_block_{index:05d}' / 'result.pkl'
                 if result.is_file():
                     summary['completed_blocks'] += 1
                     publish('checkpoint_available', block_index=index)
                     continue
                 token = uuid4().hex
-                progress = progress_directory / f'round_{label}_block_{index:05d}.status.json'
+                progress = progress_directory / f'round_{label}_block_{index:05d}_{token}.status.json'
                 metadata = dict(path=progress, controller_pid=os.getpid(), index=index,
                     label=label, attempt=attempt, token=token,
                     startup_ready_phase=startup_ready_phase, **assignment)
@@ -269,14 +251,14 @@ def run_block_jobs(function, jobs, *, max_workers, initializer=None, initargs=()
                                 os.environ.pop(key, None)
                             else:
                                 os.environ[key] = value
-                except BaseException:
+                except BaseException as error:
                     try:
                         if process.pid is not None:
                             _stop([process], stop_grace)
                             process.close()
                     finally:
                         _release_payload(payload)
-                    raise
+                    sys.exit(str(error) or 1)
                 active[index] = dict(process=process, table=table, attempt=attempt,
                     payload=payload,
                     token=token, progress=progress, last_progress=time.monotonic(),
@@ -294,7 +276,7 @@ def run_block_jobs(function, jobs, *, max_workers, initializer=None, initargs=()
             for index, entry in list(active.items()):
                 process = entry['process']
                 worker_pid = process.pid
-                fields = _read_progress(entry['progress'], entry['token'], process.pid)
+                fields = _read_progress(entry['progress'])
                 if fields.get('sequence', -1) > entry['sequence']:
                     entry.update(sequence=fields['sequence'], phase=fields['phase'],
                         last_progress=time.monotonic())
@@ -334,7 +316,7 @@ def run_block_jobs(function, jobs, *, max_workers, initializer=None, initargs=()
                     continue
                 _archive_attempt(work, label, index, entry['attempt'], entry['token'], entry['progress'])
                 if entry['attempt'] >= max_attempts:
-                    raise BlockWorkerError(f'Round {label} block {index:05d} failed after '
+                    sys.exit(f'Round {label} block {index:05d} failed after '
                         f'{max_attempts} attempts: {reason}')
                 summary['retries'] += 1
                 retries.appendleft((index, entry['table'], entry['attempt'] + 1))
@@ -356,18 +338,18 @@ def run_block_jobs(function, jobs, *, max_workers, initializer=None, initargs=()
         publish('failure_cleanup', error=repr(error))
         try:
             _stop((entry['process'] for entry in active.values()), stop_grace)
-        except BlockWorkerError as cleanup_error:
+        except BaseException as cleanup_error:
             if run_status is not None:
                 run_status['cleanup_error'] = str(cleanup_error)
             publish('failed_unreaped_workers', error=repr(error))
-            raise cleanup_error from error
+            sys.exit(str(cleanup_error) or 1)
         else:
             for entry in active.values():
                 entry['process'].close()
                 _release_payload(entry['payload'])
             active.clear()
             publish('failed', error=repr(error))
-        raise
+        sys.exit(str(error) or 1)
     finally:
         for entry in active.values():
             _release_payload(entry['payload'])

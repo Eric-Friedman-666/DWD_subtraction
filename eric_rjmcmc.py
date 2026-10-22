@@ -36,14 +36,8 @@ class CataloguePrior:
     def chirp_log_volume(bounds, minimum):
         """Normalized log-magnitude support; either positive or both signs."""
         lower, upper = bounds
-        if not (np.isfinite([lower, upper, minimum]).all() and minimum >= 0.):
-            raise ValueError('Log-chirp bounds and minimum must be finite, with minimum >= 0.')
         if minimum:
-            if not (0. < minimum < min(-lower, upper)):
-                raise ValueError('Signed log-chirp bounds must straddle a positive minimum magnitude.')
             return np.log(-lower / minimum) + np.log(upper / minimum)
-        if not (0. < lower < upper):
-            raise ValueError('Positive log-chirp bounds must satisfy 0 < lower < upper.')
         return np.log(upper / lower)
     def __init__(self, encoded_para_bounds, dwd_block_max=64, chirp_minimum=0., *, chirp_log_uniform=False):
         self.encoded_para_bounds, self.dwd_block_max = np.asarray(encoded_para_bounds, dtype=float), dwd_block_max
@@ -227,14 +221,8 @@ def run_eryn_rjmcmc(data, covariance, dwd_template_table,
         f_center = np.mean(frequency_range)
         checkpoint_file = Path(checkpoint_directory)/'eryn_chain_00.h5'
         chirp_bounds = np.asarray(derivative_bounds)*T_obs**2
-        if chirp_bounds.shape == (2,):
-            chirp_minimum = 0.
-        elif chirp_bounds.shape == (2, 2) and chirp_bounds[1, 0] == -chirp_bounds[0, 1]:
-            chirp_minimum = abs(chirp_bounds[0, 1])
-        else:
-            raise ValueError('Signed chirp bounds require matching negative/positive minimum magnitudes.')
+        chirp_minimum = 0. if chirp_bounds.ndim == 1 else abs(chirp_bounds[0, 1])
         chirp_log_uniform = True
-        CataloguePrior.chirp_log_volume(chirp_bounds.ravel()[[0, -1]], chirp_minimum)
         encoded_para_bounds = np.array([
             np.log10(np.asarray(frequency_range)/f_center)*f_center*T_obs*np.log(10.),
             chirp_bounds.ravel()[[0, -1]], [0., 2*np.pi], [-1., 1.]])

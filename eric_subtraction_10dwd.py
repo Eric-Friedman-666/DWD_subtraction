@@ -201,9 +201,6 @@ with TemporaryDirectory(prefix="10dwd_orbit_") as temporary_directory:
             available = all(name in previous and previous[name].shape == (3, sample_count) for name in series)
             available = available and all(name in previous for name in (
                 "simulation/instrument_random_seed", "config/retained_frequency_bins", "injection/source_xyz_fd"))
-            if not (compatible and available):
-                raise ValueError("Saved observation is missing required data or does not match the current "
-                                 "DWDs, duration, sampling or orbit. Set reuse_saved_data=False to simulate afresh.")
             total_xyz_td = previous[series[0]][:]
             injected_signal_xyz_td = previous[series[1]][:]
             pure_noise_xyz_td = (previous["simulation/noise_xyz_td"][:]
@@ -212,8 +209,6 @@ with TemporaryDirectory(prefix="10dwd_orbit_") as temporary_directory:
             noise_internal_seed = int(previous["simulation/instrument_random_seed"][()])
             saved_source_bins = previous["config/retained_frequency_bins"][:]
             injected_source_xyz_fd = previous["injection/source_xyz_fd"][:]
-            if injected_source_xyz_fd.shape != (len(source_id), 3, len(saved_source_bins)):
-                raise ValueError("Saved per-source FFT shape is incompatible; set reuse_saved_data=False to simulate afresh.")
     else:
         print("     Simulating DWD signals and fresh ACC+OMS noise", flush=True)
         injected_source_xyz_td, pure_noise_xyz_td, noise_internal_seed = simulate_lisa_daily(
@@ -239,10 +234,6 @@ with TemporaryDirectory(prefix="10dwd_orbit_") as temporary_directory:
     physical_frequency = fft_frequency[retained_frequency_bins]
     if simulation_reused:
         saved_indices = np.searchsorted(saved_source_bins, retained_frequency_bins)
-        if np.any(saved_indices >= len(saved_source_bins)) or not np.array_equal(
-                saved_source_bins[saved_indices], retained_frequency_bins):
-            raise ValueError("Saved per-source FFTs do not cover this frequency block; "
-                             "set reuse_saved_data=False to simulate afresh.")
         injected_source_xyz_fd = injected_source_xyz_fd[:, :, saved_indices]
     else:
         injected_source_xyz_fd = np.stack([
